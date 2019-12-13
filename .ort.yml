@@ -1,0 +1,26 @@
+excludes:
+  paths:
+  - pattern: "xyzhub-test/**"
+    reason: "TEST_TOOL_OF"
+    comment: "This project contains only tests to verify correct functioning of XYZ Hub."
+  - pattern: "xyzhub-service/src/main/resources/**"
+    reason: "DOCUMENTATION_OF"
+    comment: "This is the folder with the OpenAPI specification documents containing lists with acceptable licenses."
+  scopes:
+  - name: "provided"
+    reason: "PROVIDED_BY"
+    comment: "These are dependencies provided by the JDK or container at runtime. They are not distributed in the context of this project."
+  - name: "test"
+    reason: "TEST_TOOL_OF"
+    comment: "These are dependencies used for testing. They are not distributed in the context of this project."
+resolutions:
+  errors:
+  - message: .*Timeout after 300 seconds while scanning file.*modules\/library\/sample-data\/src\/main\/resources\/org\/geotools\/test-data\/xml\/fme\/roads\/roads\.xml.*
+    reason: "CANT_FIX_ISSUE"
+    comment: "The issue refers to test data which is not present in the deployed version"
+  - message: .*Timeout after 300 seconds while scanning file.*modules\/plugin\/epsg-wkt\/src\/main\/resources\/org\/geotools\/referencing\/crs\/epsg.properties.*"
+    reason: "SCANNER_ISSUE"
+    comment: "The issue is related to the scanner."
+  - message: .*Timeout after 300 seconds while scanning file.*
+    reason: "SCANNER_ISSUE"
+    comment: "The issue is related to the scanner."

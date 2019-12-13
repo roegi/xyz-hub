@@ -1,0 +1,59 @@
+PersonDeserializer 10 million objects - times in ms:
+
+with Contacts
+after 10M objects: 13659
+after Person: 1
+after serialize: 4526
+after PersonDeserialize: 5617
+after serialize again: 4225
+
+with only Id
+after 10M objects: 12915
+after Person: 0
+after serialize: 5732
+after PersonDeserialize: 13
+after serialize again: 2
+
+with Id and Name, skipping Contacts
+after 10M objects: 12856
+after Person: 0
+after serialize: 4979
+after PersonDeserialize: 12
+after serialize again: 3
+
+with Id and Name and Contacts
+after 10M objects: 12727
+after Person: 0
+after serialize: 4439
+after PersonDeserialize: 13015
+after serialize again: 6385
+
+with standard ObjectMapper
+after 10M objects: 13279
+after Person: 0
+after serialize: 5014
+after PersonDeserialize: 16508
+after serialize again: 6003
+
+
+Comparing both methods, full object:
+after 10M objects: 12781
+after Person: 0
+after serialize: 4517
+after PersonDeserialize: 6747
+after serialize from PersonDeserialize: 12588
+resulting json size: 517777830
+after ObjectMapper: 13405
+after serialize from ObjectMapper: 19138
+resulting json size: 517777830
+
+Comparing both methods, PersonDeserializer (skip contacts) vs ObjectMapper (full object)
+after 10M objects: 13727
+after Person: 0
+after serialize: 4426
+after PersonDeserialize: 10
+after serialize from PersonDeserialize: 2
+resulting json size: 37 ---- {"id":0,"name":"lucas","contacts":[]}
+after ObjectMapper: 7031
+after serialize from ObjectMapper: 11928
+resulting json size: 517777830
