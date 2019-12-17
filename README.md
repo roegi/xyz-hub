@@ -6,7 +6,6 @@
 XYZ Hub is a RESTful web service for access and management of geo data.
 
 # License
-# License
 
 Copyright (C) 2017-2019 HERE Europe B.V.
 
