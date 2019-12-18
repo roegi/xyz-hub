@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-XYZ Hub is a RESTful web service for access and management of geospataial data. 
+XYZ Hub is a RESTful web service for access and management of geospatial data. 
 
 # Overview
 Some of the features of XYZ Hub are:
