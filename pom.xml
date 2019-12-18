@@ -52,26 +52,12 @@
     <module>xyz-psql-java</module>
   </modules>
 
-
-  <!-- TODO: REMOVE when ported -->
-  <scm>
-    <connection>scm:git:ssh://gerrit.it.here.com:29418/CommunityPlatform/backend/geospace-api
-    </connection>
-    <developerConnection>
-      scm:git:ssh://gerrit.it.here.com:29418/CommunityPlatform/backend/geospace-api
-    </developerConnection>
-    <tag>HEAD</tag>
-    <url>https://gerrit.it.here.com/#/admin/projects/CommunityPlatform/backend/geospace-api</url>
-  </scm>
-
-  <!-- TODO: ADD when ported
   <scm>
     <url>https://github.com/heremaps/xyz-hub</url>
     <connection>scm:git:git://github.com/heremaps/xyz-hub</connection>
     <developerConnection>scm:git:ssh://github.com:heremaps/xyz-hub</developerConnection>
     <tag>HEAD</tag>
   </scm>
-  -->
 
   <distributionManagement>
     <snapshotRepository>
