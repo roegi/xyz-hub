@@ -19,7 +19,7 @@ Some of the features of XYZ Hub are:
 
 You can find more information in the [XYZ Docs](https://www.here.xyz/api) and in the [OpenAPI specification](https://xyz.api.here.com/hub/static/redoc/index.html).
 
-XYZ Hub uses is [GeoJSON](https://tools.ietf.org/html/rfc79460) as the main geospataial data exchange format. Tiled data can also be provided as [MVT](https://github.com/mapbox/vector-tile-spec/blob/master/2.1/README.md). 
+XYZ Hub uses [GeoJSON](https://tools.ietf.org/html/rfc79460) as the main geospataial data exchange format. Tiled data can also be provided as [MVT](https://github.com/mapbox/vector-tile-spec/blob/master/2.1/README.md). 
 
 This project is _experimental and work in progress_.
 
