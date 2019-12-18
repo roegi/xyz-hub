@@ -1,8 +1,4 @@
-<div style="display: flex; align-items:center;">
-	<img width="70" alt="XYZ" src="xyz.svg"/>
-	<span style="font-weight: bold; font-size: 50px; padding-left: 10px">XYZ Hub</span>
-</div>
-
+# <img align="left" src="xyz.svg" width="70" height="70"/> XYZ Hub
 ---
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
