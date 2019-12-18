@@ -19,6 +19,7 @@
 
 package com.here.xyz.hub.task;
 
+import com.here.xyz.hub.rest.HttpException;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -50,9 +51,9 @@ public abstract class ModifyOp<INPUT, SOURCE, TARGET> {
    * Applies the modifications provided by the input to the source state, both provided with the input, and produces the target state as
    * output.
    *
-   * @throws ModifyOpError when an error occurs.
+   * @throws ModifyOpError when a processing error occurs.
    */
-  public void process() throws ModifyOpError {
+  public void process() throws ModifyOpError, HttpException {
     for (Entry<INPUT, SOURCE, TARGET> entry : entries) {
       try {
         // IF NOT EXISTS
@@ -78,7 +79,7 @@ public abstract class ModifyOp<INPUT, SOURCE, TARGET> {
               entry.result = merge(entry.head, entry.base, entry.input);
               break;
             case PATCH:
-              entry.result = patch(entry.head, entry.input);
+              entry.result = patch(entry.head, entry.base, entry.input);
               break;
             case REPLACE:
               entry.result = replace(entry.head, entry.input);
@@ -96,20 +97,21 @@ public abstract class ModifyOp<INPUT, SOURCE, TARGET> {
         if (isTransactional) {
           throw e;
         }
+        // TODO: Check if this is included in the failed array
         entry.exception = e;
       }
     }
   }
 
-  public abstract TARGET patch(SOURCE headState, INPUT inputState) throws ModifyOpError;
+  public abstract TARGET patch(SOURCE headState, SOURCE editedState, INPUT inputState) throws ModifyOpError, HttpException;
 
-  public abstract TARGET merge(SOURCE headState, SOURCE editedState, INPUT inputState) throws ModifyOpError;
+  public abstract TARGET merge(SOURCE headState, SOURCE editedState, INPUT inputState) throws ModifyOpError, HttpException;
 
-  public abstract TARGET replace(SOURCE headState, INPUT inputState) throws ModifyOpError;
+  public abstract TARGET replace(SOURCE headState, INPUT inputState) throws ModifyOpError, HttpException;
 
-  public abstract TARGET create(INPUT inputState) throws ModifyOpError;
+  public abstract TARGET create(INPUT inputState) throws ModifyOpError, HttpException;
 
-  public abstract TARGET transform(SOURCE sourceState) throws ModifyOpError;
+  public abstract TARGET transform(SOURCE sourceState) throws ModifyOpError, HttpException;
 
   /**
    * Returns true, if the 2 objects represent the same object in the same state. Modifications that are not relevant should be ignored by

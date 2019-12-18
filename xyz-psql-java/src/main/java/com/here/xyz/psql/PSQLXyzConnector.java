@@ -91,11 +91,6 @@ import org.slf4j.LoggerFactory;
  */
 @SuppressWarnings("SqlResolve")
 public class PSQLXyzConnector extends PSQLRequestStreamHandler {
-  //Clustering constants
-  public static final String HEXBIN = "hexbin";
-  public static final String HEXBIN_RESOLUTION = "resolution";
-  public static final String HEXBIN_PROPERTY = "property";
-  public static final String HEXBIN_POINTMODE = "pointmode";
 
   protected static final int STATEMENT_TIMEOUT_SECONDS = 24;
 
@@ -409,123 +404,21 @@ public class PSQLXyzConnector extends PSQLRequestStreamHandler {
 
   /**** Begin - HEXBIN related section ******/
 
-  private static String h3sqlBegin =
-      "  select "
-          + "  ( "
-          + "   select row_to_json(ftr) from "
-          + "   (  "
-          + "    select  "
-          + "     'Feature'::text as type, "
-          + "     left(md5( %8$s ),15) as id, "
-          + "     ( select row_to_json( prop ) "
-          + "       from "
-          + "       ( select 'H3'::text as kind, "
-          + "                 h3 as kind_detail, "
-          + "                 %1$d as resolution, "
-          + "                 %5$d as level, "
-          + "                 %7$s as aggregation, "
-          + "                 h3IsPentagon( ('x' || h3 )::bit(64)::bigint ) as pentagon, "
-          + "                 st_asgeojson( %2$s, 7 )::json#>'{coordinates}' as %6$s "
-          + "       ) prop "
-          + "     ) as properties "
-          + "    ) ftr "
-          + "   ) as jsondata, "
-          + "   st_asgeojson( %3$s, 7 )::json as geojson "
-          + "  from "
-          + "  ( "
-          + "   with h3cluster as "
-          + "   ( select oo.h3, "
-          + "           ( select row_to_json( t1 ) from ( select qty %4$s ) t1 ) as agg, "
-          + "           st_containsproperly( ",
-  //+"                  st_envelope( st_buffer( ST_MakeEnvelope( 45, 21.943045533438177, 67.49999999999997, 40.97989806962013, 4326 )::geography, ( 2.5 * edgeLengthM( 2 )) )::geometry )"
-  h3sqlMid =
-      "                    , oo.geo ) as omni, "
-          + "           oo.geo "
-          + "     from "
-          + "     ( "
-          + "      select "
-          + "       to_hex( c.h3 ) as h3, "
-          + "       sum(qty) as qty, min(min) as min , max(max) as max, sum(sum) as sum, round( sum( qty * avg )/ sum(qty), 5) as avg, "
-          + "       h3togeoboundarydeg( c.h3 )::geometry(Polygon,4326) AS geo "
-          + "      from "
-          + "      ( "
-          + "        select a_data.qty, a_data.min, a_data.max, a_data.sum, a_data.avg, "
-          + "        coveringDeg(a_data.refpt,  %1$d ) as h3 "
-          + "        from "
-          + "        ( "
-          + "          select "
-          + "             count(1) as qty, "
-          + "             min(cval) as min, "
-          + "             max(cval) as max, "
-          + "             sum(cval) as sum, "
-          + "             round(avg(cval), 5) as avg, "
-          + "             (case "
-          + "               when q2.lon < -180 then 0 "
-          + "               when q2.lon > 180  then power(2, ( %3$d )) * %4$d "
-          + "               else floor((q2.lon + 180.0) / 360.0 * power(2, ( %3$d )) * %4$d) "
-          + "              end "
-          + "             )::bigint as px, "
-          + "             (case "
-          + "               when q2.lat <= -85 then power(2, ( %3$d )) * %4$d "
-          + "               when q2.lat >= 85  then 0 "
-          + "               else floor((1.0 - ln(tan(radians(q2.lat)) + (1.0 / cos(radians(q2.lat)))) / pi()) / 2 * power(2, ( %3$d )) * %4$d) "
-          + "              end "
-          + "              )::bigint as py, "
-          + "              ST_Centroid( ST_ConvexHull( st_collect( refpt ) ) ) as refpt "
-          + "          from "
-          + "          ( "
-          + "            select cval, st_x(in_data.refpt) as lon, st_y(in_data.refpt) as lat, refpt "
-          + "            from "
-          + "            ( "
-          + "              select %2$s as cval,",
-  /*
-  +"         and geo && st_envelope( st_buffer( ST_MakeEnvelope( 45, 21.943045533438177, 67.49999999999997, 40.97989806962013, 4326 )::geography, ( 2.5 * edgeLengthM( 2 )) )::geometry ) "
-  +"         AND st_intersects( geo , st_envelope( st_buffer( ST_MakeEnvelope( 45, 21.943045533438177, 67.49999999999997, 40.97989806962013, 4326 )::geography, ( 2.5 * edgeLengthM( 2 )) )::geometry )) "
-  */
-  h3sqlEnd =
-            "             ) in_data "
-          + "          ) q2 "
-          + "          group by px, py "
-          + "        ) a_data "
-          + "      ) c "
-          + "      group by h3 "
-          + "     ) oo "
-          + "     where 1 = 1 "
-          + "   ) "
-          + "   select * from h3cluster "
-          + "   where 1 = 1 "
-          + "     and omni = true "
-          + "     %1$s "
-          + "  ) outer_v ";
-
-
-  private static int[] MaxResForZoom = {2, 2, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 9, 9, 10, 11, 11, 12, 13, 14, 14, 15, 15};
-
-  private static int zoom2resolution(int zoom) {
-    return (MaxResForZoom[zoom]);
-  }
-
-  private static int bbox2zoom(BBox bbox) {
-    return ((int) Math.round((5.88610403145016 - Math.log(bbox.maxLon() - bbox.minLon())) / 0.693147180559945));
-  }
-
-  private static int pxSize = 64;
-
   private FeatureCollection processHexbinGetFeaturesByBBoxEvent(GetFeaturesByBBoxEvent event, BBox bbox, boolean isBigQuery, Map<String, Object> clusteringParams) throws Exception {
-
-    int zLevel = (event instanceof GetFeaturesByTileEvent ? (int) ((GetFeaturesByTileEvent) event).getLevel() : bbox2zoom(bbox)),
-        maxResForLevel = zoom2resolution(zLevel),
-        h3res = (clusteringParams != null && clusteringParams.get(HEXBIN_RESOLUTION) != null
-            ? Math.min((Integer) clusteringParams.get(HEXBIN_RESOLUTION), maxResForLevel)
+    
+    int zLevel = (event instanceof GetFeaturesByTileEvent ? (int) ((GetFeaturesByTileEvent) event).getLevel() : H3.bbox2zoom(bbox)),
+        maxResForLevel = H3.zoom2resolution(zLevel),
+        h3res = (clusteringParams != null && clusteringParams.get(H3.HEXBIN_RESOLUTION) != null
+            ? Math.min((Integer) clusteringParams.get(H3.HEXBIN_RESOLUTION), maxResForLevel)
             : maxResForLevel);
 
-    String statisticalProperty = (String) clusteringParams.get(HEXBIN_PROPERTY);
+    String statisticalProperty = (String) clusteringParams.get(H3.HEXBIN_PROPERTY);
     boolean statisticalPropertyProvided = (statisticalProperty != null && statisticalProperty.length() > 0),
-        h3cflip = (clusteringParams.get(HEXBIN_POINTMODE) == Boolean.TRUE);
+        h3cflip = (clusteringParams.get(H3.HEXBIN_POINTMODE) == Boolean.TRUE);
 
     final String expBboxSql = String.format("st_envelope( st_buffer( ST_MakeEnvelope(%f,%f,%f,%f, 4326)::geography, ( 2.5 * edgeLengthM( %d )) )::geometry )", bbox.minLon(), bbox.minLat(), bbox.maxLon(), bbox.maxLat(), h3res);
 
-        /*clippedGeo - passed bbox is extended by "margin" on service level */
+        /*clippedGeo - passed bbox is extended by "margin" on service level */                        
     String clippedGeo = ( !event.getClip() ? "geo" : String.format("ST_Intersection(geo,ST_MakeEnvelope(%f,%f,%f,%f,4326) )", bbox.minLon(), bbox.minLat(), bbox.maxLon(), bbox.maxLat() ) ),
            fid = ( !event.getClip() ? "h3" : String.format("h3 || %f || %f",bbox.minLon(), bbox.minLat() ) ),
            filterEmptyGeo = ( !event.getClip() ? "" : String.format(" and not st_isempty( %s ) ", clippedGeo ) );
@@ -534,31 +427,31 @@ public class PSQLXyzConnector extends PSQLRequestStreamHandler {
 
     String aggField = ( statisticalPropertyProvided ? "jsonb_set('{}'::jsonb, ? , agg::jsonb)::json" : "agg" );
 
-    final SQLQuery query = new SQLQuery(String.format(h3sqlBegin, h3res,
-                                                       !h3cflip ? "st_centroid(geo)" : "geo",
+    final SQLQuery query = new SQLQuery(String.format(H3.h3sqlBegin, h3res, 
+                                                       !h3cflip ? "st_centroid(geo)" : "geo", 
                                                         h3cflip ? "st_centroid(geo)" : clippedGeo,
-                                                       statisticalPropertyProvided ? ", min, max, sum, avg" : "",
-                                                       zLevel,
+                                                       statisticalPropertyProvided ? ", min, max, sum, avg, median" : "", 
+                                                       zLevel, 
                                                        !h3cflip ? "centroid" : "hexagon",
                                                        aggField,
                                                        fid ));
 
     if(statisticalPropertyProvided)
     { ArrayList<String> jpath = new ArrayList<>();
-      jpath.addAll(Arrays.asList(statisticalProperty.split("\\.")));
+      jpath.add( statisticalProperty );
       query.addParameter(createSQLArray(jpath.toArray(new String[]{}), "text"));
     }
 
     query.append(expBboxSql);
 
     if (!statisticalPropertyProvided) {
-      query.append(new SQLQuery(String.format(h3sqlMid, h3res, "(0.0)::numeric", zLevel, pxSize)));
+      query.append(new SQLQuery(String.format(H3.h3sqlMid, h3res, "(0.0)::numeric", zLevel, H3.pxSize)));
     } else {
       ArrayList<String> jpath = new ArrayList<>();
       jpath.add("properties");
       jpath.addAll(Arrays.asList(statisticalProperty.split("\\.")));
 
-      query.append(new SQLQuery(String.format(h3sqlMid, h3res, "(jsondata#>> ?)::numeric", zLevel, pxSize)));
+      query.append(new SQLQuery(String.format(H3.h3sqlMid, h3res, "(jsondata#>> ?)::numeric", zLevel, H3.pxSize)));
       query.addParameter(createSQLArray(jpath.toArray(new String[]{}), "text"));
     }
 
@@ -577,7 +470,7 @@ public class PSQLXyzConnector extends PSQLRequestStreamHandler {
 
     //query.append("limit ?", 1000);
 
-    query.append( String.format(h3sqlEnd,filterEmptyGeo) );
+    query.append( String.format(H3.h3sqlEnd,filterEmptyGeo) );
     query.append("LIMIT ?", event.getLimit());
 
 /*
@@ -632,7 +525,7 @@ public class PSQLXyzConnector extends PSQLRequestStreamHandler {
     String clusteringType = event.getClusteringType();
     Map<String, Object> clusteringParams = event.getClusteringParams();
 
-    if (clusteringType != null && HEXBIN.equalsIgnoreCase(clusteringType)) {
+    if (clusteringType != null && H3.HEXBIN.equalsIgnoreCase(clusteringType)) {
       return processHexbinGetFeaturesByBBoxEvent(event, bbox, isBigQuery, clusteringParams);
     }
 

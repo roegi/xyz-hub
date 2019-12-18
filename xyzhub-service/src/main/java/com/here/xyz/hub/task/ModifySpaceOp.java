@@ -19,9 +19,15 @@
 
 package com.here.xyz.hub.task;
 
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonMappingException;
 import com.here.xyz.hub.connectors.models.Space;
+import com.here.xyz.hub.rest.HttpException;
 import com.here.xyz.hub.util.diff.Difference;
 import com.here.xyz.hub.util.diff.Patcher;
+import com.here.xyz.hub.util.diff.Patcher.MergeConflictException;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import java.util.List;
@@ -36,17 +42,17 @@ public class ModifySpaceOp extends ModifyOp<JsonObject, Space, Space> {
 
   @SuppressWarnings({"rawtypes", "unchecked"})
   @Override
-  public Space patch(Space headState, JsonObject inputState) throws ModifyOpError {
-    Map headClone = Json.mapper.convertValue(headState, Map.class);
+  public Space patch(Space headState, Space editedState, JsonObject inputState) throws ModifyOpError, HttpException {
+    Map editedClone = Json.mapper.convertValue(editedState, Map.class);
     Map input = inputState.getMap();
-    final Difference difference = Patcher.calculateDifferenceOfPartialUpdate(headClone, input, null, true);
-    Patcher.patch(headClone, difference);
-    return Json.mapper.convertValue(headClone, Space.class);
+    final Difference difference = Patcher.calculateDifferenceOfPartialUpdate(editedClone, input, null, true);
+    Patcher.patch(editedClone, difference);
+    return merge(headState, editedState, new JsonObject(editedClone));
   }
 
   @SuppressWarnings("rawtypes")
   @Override
-  public Space merge(Space headState, Space editedState, JsonObject inputState) throws ModifyOpError {
+  public Space merge(Space headState, Space editedState, JsonObject inputState) throws ModifyOpError, HttpException {
     Map headClone = Json.mapper.convertValue(headState, Map.class);
     Map editedClone = Json.mapper.convertValue(editedState, Map.class);
     Map input = inputState.getMap();
@@ -56,20 +62,32 @@ public class ModifySpaceOp extends ModifyOp<JsonObject, Space, Space> {
     try {
       final Difference mergedDiff = Patcher.mergeDifferences(diffInput, diffHead);
       Patcher.patch(headClone, mergedDiff);
-      return Json.mapper.convertValue(headClone, Space.class);
-    } catch (Exception e) {
+      return Json.mapper.readValue(Json.encode(headClone), Space.class);
+    } catch (MergeConflictException e) {
       throw new ModifyOpError(e.getMessage());
+    } catch( JsonProcessingException e ){
+      throw new HttpException(BAD_REQUEST, "Invalid space definition: " + e.getMessage(), e);
     }
   }
 
   @Override
-  public Space replace(Space headState, JsonObject inputState) throws ModifyOpError {
-    return inputState.mapTo(Space.class);
+  public Space replace(Space headState, JsonObject inputState) throws ModifyOpError, HttpException {
+    try {
+      return Json.mapper.readValue(Json.encode(inputState), Space.class);
+    }
+    catch( JsonProcessingException e ){
+      throw new HttpException(BAD_REQUEST, "Invalid space definition: " + e.getMessage(), e);
+    }
   }
 
   @Override
-  public Space create(JsonObject input) throws ModifyOpError {
-    return input.mapTo(Space.class);
+  public Space create(JsonObject input) throws ModifyOpError, HttpException {
+    try {
+      return Json.mapper.readValue(Json.encode(input), Space.class);
+    }
+    catch( JsonProcessingException e ){
+      throw new HttpException(BAD_REQUEST, "Invalid space definition: " + e.getMessage(), e);
+    }
   }
 
   @Override

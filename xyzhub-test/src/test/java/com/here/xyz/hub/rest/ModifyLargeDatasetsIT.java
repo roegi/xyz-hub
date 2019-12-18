@@ -40,7 +40,7 @@ public class ModifyLargeDatasetsIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     remove();
     createSpace();
   }

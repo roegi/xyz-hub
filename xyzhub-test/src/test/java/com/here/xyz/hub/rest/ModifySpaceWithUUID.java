@@ -47,7 +47,7 @@ public class ModifySpaceWithUUID extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     remove();
     final ValidatableResponse response = given().
         contentType(APPLICATION_JSON).

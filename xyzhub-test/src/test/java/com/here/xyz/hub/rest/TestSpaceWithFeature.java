@@ -49,7 +49,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
     TestWithSpaceCleanup.removeSpace("x-psql-test");
   }
 
-  protected static void createSpace() throws IOException {
+  protected static void createSpace() {
     final ValidatableResponse response = given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
@@ -63,7 +63,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         body("storage.id", equalTo("psql"));
   }
 
-  protected static String createSpace(final AuthProfile authProfile, final String title, final boolean shared) throws IOException {
+  protected static String createSpace(final AuthProfile authProfile, final String title, final boolean shared) {
     return given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
@@ -78,7 +78,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         path("id");
   }
 
-  static void addFeatures() throws IOException {
+  static void addFeatures() {
     given().
         contentType(APPLICATION_GEO_JSON).
         accept(APPLICATION_GEO_JSON).
@@ -121,7 +121,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
     executorService.awaitTermination(10, TimeUnit.SECONDS);
   }
 
-  static void publishSpace(String spaceId) throws IOException {
+  static void publishSpace(String spaceId) {
     final ValidatableResponse response = given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
@@ -134,7 +134,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         body("shared", equalTo(true));
   }
 
-  static void addListener(String spaceId) throws IOException {
+  static void addListener(String spaceId) {
     final ValidatableResponse response = given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
@@ -146,7 +146,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         body("id", equalTo(spaceId));
   }
 
-  static void addProcessor(String spaceId) throws IOException {
+  static void addProcessor(String spaceId) {
     final ValidatableResponse response = given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).

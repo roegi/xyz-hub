@@ -24,6 +24,7 @@ import com.here.xyz.XyzSerializable;
 import com.here.xyz.hub.util.diff.Difference;
 import com.here.xyz.hub.util.diff.Patcher;
 import com.here.xyz.models.geojson.implementation.Feature;
+import io.vertx.core.json.Json;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.concurrent.ThreadSafe;
@@ -36,12 +37,12 @@ public class ModifyFeatureOp extends ModifyOp<Feature, Feature, Feature> {
   }
 
   @Override
-  public Feature patch(Feature headState, Feature inputState) {
-    final Map<String, Object> headStateMap = headState.asMap();
+  public Feature patch(Feature headState, Feature editedState, Feature inputState) throws ModifyOpError {
+    final Map<String, Object> editedStateMap = editedState.asMap();
 
-    final Difference diff = Patcher.calculateDifferenceOfPartialUpdate(headStateMap, inputState.asMap(), null, true);
-    Patcher.patch(headStateMap, diff);
-    return XyzSerializable.fromMap(headStateMap, Feature.class);
+    final Difference diff = Patcher.calculateDifferenceOfPartialUpdate(editedStateMap, inputState.asMap(), null, true);
+    Patcher.patch(editedStateMap, diff);
+    return merge(headState, editedState, XyzSerializable.fromMap(editedStateMap, Feature.class));
   }
 
   @Override
@@ -49,6 +50,7 @@ public class ModifyFeatureOp extends ModifyOp<Feature, Feature, Feature> {
     if (equalStates(editedState, headState)) {
       return replace(headState, inputState);
     }
+
     final Map<String, Object> editedStateMap = editedState.asMap();
     final Difference diffInput = Patcher.getDifference(editedStateMap, inputState.asMap());
     final Difference diffHead = Patcher.getDifference(editedStateMap, headState.asMap());
@@ -62,7 +64,11 @@ public class ModifyFeatureOp extends ModifyOp<Feature, Feature, Feature> {
   }
 
   @Override
-  public Feature replace(Feature headState, Feature inputState) {
+  public Feature replace(Feature headState, Feature inputState) throws ModifyOpError {
+    if (getUuid(inputState) != null && !Objects.equal(getUuid(inputState), getUuid(headState) != null)) {
+      throw new ModifyOpError(
+          "The feature with id " + headState.getId() + " cannot be replaced. The provided UUID doesn't match the UUID of the head state: "+ getUuid(headState));
+    }
     return inputState.copy();
   }
 
@@ -76,9 +82,21 @@ public class ModifyFeatureOp extends ModifyOp<Feature, Feature, Feature> {
     return sourceState;
   }
 
+  private String getUuid(Feature feature) {
+    if (feature == null || feature.getProperties() == null || feature.getProperties().getXyzNamespace() == null) {
+      return null;
+    }
+    return feature.getProperties().getXyzNamespace().getUuid();
+  }
+
   @Override
-  public boolean equalStates(Feature a, Feature b) {
-    // TODO: Check the UUID
-    return Objects.equal(a, b);
+  public boolean equalStates(Feature state1, Feature state2) {
+    if( Objects.equal(state1, state2) ) {
+      return true;
+    }
+
+    // TODO: Move to Feature#equals()
+    Difference diff = Patcher.getDifference(Json.mapper.convertValue(state1, Map.class), Json.mapper.convertValue(state2, Map.class));
+    return diff == null;
   }
 }

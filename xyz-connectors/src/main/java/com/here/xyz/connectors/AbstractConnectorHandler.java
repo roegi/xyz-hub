@@ -43,12 +43,12 @@ import org.slf4j.LoggerFactory;
 public abstract class AbstractConnectorHandler implements RequestStreamHandler {
 
   /**
-   * The suffix for response events.
+   * The event-type-suffix for response notifications.
    */
   @SuppressWarnings("WeakerAccess")
   public static final String RESPONSE = ".response";
   /**
-   * The suffix for request events.
+   * The event-type-suffix for request notifications.
    */
   static final String REQUEST = ".request";
   /**

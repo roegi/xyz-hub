@@ -33,7 +33,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class ConfigDecryptor {
 
-  private static AWSKMS kmsClient = AWSKMSClientBuilder.defaultClient();
+  private static AWSKMS kmsClient;
   private static final String encPrefix = "{{";
   private static final String encPostfix = "}}";
   private static final String SYMMETRIC_ALGORITHM = "AES/CTR/NoPadding";
@@ -78,7 +78,7 @@ public class ConfigDecryptor {
     ByteBuffer cipherTextBlob = ByteBuffer.wrap(Base64.getDecoder().decode(encryptedKey));
     DecryptRequest req = new DecryptRequest().withCiphertextBlob(cipherTextBlob);
     try {
-      ByteBuffer plainTextBytes = kmsClient.decrypt(req).getPlaintext();
+      ByteBuffer plainTextBytes = getKmsClient().decrypt(req).getPlaintext();
       return new String(Base64.getEncoder().encode(plainTextBytes.array()));
     } catch (RuntimeException e) {
       throw new CryptoException("Error when trying to decrypt symmetric key. Please check the following:\n"
@@ -119,6 +119,13 @@ public class ConfigDecryptor {
       super(message, cause);
     }
 
+  }
+
+  private static AWSKMS getKmsClient() {
+    if (kmsClient == null) {
+       kmsClient = AWSKMSClientBuilder.defaultClient();
+    }
+    return kmsClient;
   }
 
   private static byte[] hexStringToByteArray(String s) {

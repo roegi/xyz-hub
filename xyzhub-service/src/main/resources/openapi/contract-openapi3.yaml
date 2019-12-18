@@ -5,7 +5,7 @@ info:
   title: HERE XYZ Hub
   version: 1.0.0
 servers:
-  - url: /
+  - url: /hub
 paths:
   /hub/spaces:
     get:

@@ -25,8 +25,17 @@
     <groupId>com.here.xyz</groupId>
     <artifactId>xyzhub-aggregator</artifactId>
     <relativePath>../</relativePath>
-    <version>0.0.20-SNAPSHOT</version>
+    <version>0.0.24-SNAPSHOT</version>
   </parent>
+
+  <licenses>
+    <license>
+      <comments>SPDX-License-Identifier: Apache-2.0</comments>
+      <distribution>repo</distribution>
+      <name>Apache License, Version 2.0</name>
+      <url>http://www.apache.org/licenses/LICENSE-2.0</url>
+    </license>
+  </licenses>
 
   <name>XYZ Hub Service</name>
   <description>XYZ Hub Service</description>
@@ -128,17 +137,18 @@
             <executions>
               <execution>
                 <configuration>
-                  <environmentVariables>
-                    <START_HUB>${startHub}</START_HUB>
-                    <PATH_TO_CONFIG>${pathToConfig}</PATH_TO_CONFIG>
-                  </environmentVariables>
-                  <executable>./deploy.sh</executable>
-                  <workingDirectory>${project.parent.basedir}/deployment</workingDirectory>
+                  <arguments>
+                    <argument>up</argument>
+                    <argument>--detach</argument>
+                    <argument>--build</argument>
+                    <argument>--force-recreate</argument>
+                  </arguments>
+                  <executable>docker-compose</executable>
                 </configuration>
                 <goals>
                   <goal>exec</goal>
                 </goals>
-                <id>build-and-start-docker-image</id>
+                <id>build-and-start-docker-runtime</id>
                 <phase>install</phase>
               </execution>
             </executions>

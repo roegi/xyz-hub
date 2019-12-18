@@ -28,6 +28,7 @@ import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.ext.jwt.JWTOptions;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import org.apache.commons.io.IOUtils;
 
@@ -70,7 +71,7 @@ public class JwtGenerator {
   }
 
   private static String readResourceFile(String resourceFilename) throws IOException {
-    return IOUtils.toString(JwtGenerator.class.getResourceAsStream(resourceFilename), "UTF-8");
+    return IOUtils.toString(JwtGenerator.class.getResourceAsStream(resourceFilename)).trim();
   }
 
   public static String generateToken(JWTPayload payload) {

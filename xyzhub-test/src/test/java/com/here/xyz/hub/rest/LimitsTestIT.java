@@ -43,7 +43,7 @@ public class LimitsTestIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     createSpaceWithTokenLimits();
   }
 
@@ -54,7 +54,7 @@ public class LimitsTestIT extends TestSpaceWithFeature {
       removeSpace(cleanUpId);
     }
   }
-  private void createSpaceWithTokenLimits() throws IOException {
+  private void createSpaceWithTokenLimits() {
     given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
@@ -66,7 +66,7 @@ public class LimitsTestIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void create2SpacesTest() throws IOException {
+  public void create2SpacesTest() {
     ValidatableResponse response = given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
@@ -80,7 +80,7 @@ public class LimitsTestIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void addMultipleFeatures() throws IOException {
+  public void addMultipleFeatures() {
     given().
         contentType(APPLICATION_GEO_JSON).
         accept(APPLICATION_GEO_JSON).
@@ -93,7 +93,7 @@ public class LimitsTestIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void add1Feature() throws IOException {
+  public void add1Feature() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).

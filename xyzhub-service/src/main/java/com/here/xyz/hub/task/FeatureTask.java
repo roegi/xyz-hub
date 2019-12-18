@@ -549,12 +549,12 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
       final HashMap<String, String> idsMap = new HashMap<>();
       for (Entry<Feature, Feature, Feature> entry : modifyOp.entries) {
         if (entry.input.getId() != null) {
-          String hash = null;
+          String uuid = null;
           final Properties properties = entry.input.getProperties();
           if (properties != null && properties.getXyzNamespace() != null) {
-            hash = properties.getXyzNamespace().getUuid();
+            uuid = properties.getXyzNamespace().getUuid();
           }
-          idsMap.put(entry.input.getId(), hash);
+          idsMap.put(entry.input.getId(), uuid);
         }
       }
       if (idsMap.size() == 0) {
@@ -591,7 +591,7 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
         final FeatureCollection collection = (FeatureCollection) response;
         final List<Feature> features = collection.getFeatures();
 
-        // For each input feature there could 0, 1(head state) or 2 (head state and edited state) features in the response
+        // For each input feature there could be 0, 1(head state) or 2 (head state and base state) features in the response
         if (features == null) {
           callback.call(this);
           return;
@@ -600,8 +600,8 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
         for (final Feature feature : features) {
           final String id = feature.getId();
 
-          // The hash the client has requested.
-          final String requestedHash = idsMap.get(id);
+          // The uuid the client has requested.
+          final String requestedUuid = idsMap.get(id);
 
           int position = getPositionForId(feature.getId());
           if (position == -1) { // There is no object with this ID in the input states
@@ -612,13 +612,17 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
             throw new IllegalStateException("Received a feature with missing space namespace properties for object '" + id + "'");
           }
 
-          String hash = feature.getProperties().getXyzNamespace().getUuid();
+          String uuid = feature.getProperties().getXyzNamespace().getUuid();
 
-          if (modifyOp.entries.get(position).head == null || hash != null && !hash.equals(requestedHash)) {
+          // Set the head state( i.e. the latest version in the database )
+          if (modifyOp.entries.get(position).head == null || uuid != null && !uuid.equals(requestedUuid)) {
             modifyOp.entries.get(position).head = feature;
           }
 
-          if (modifyOp.entries.get(position).base == null || hash != null && hash.equals(requestedHash)) {
+          // Set the base state( i.e. the original version that the user was editing )
+          // Note: The base state must not be empty. If the connector doesn't support history and doesn't return the base state, use the
+          // head state instead.
+          if (modifyOp.entries.get(position).base == null || uuid != null && uuid.equals(requestedUuid)) {
             modifyOp.entries.get(position).base = feature;
           }
         }

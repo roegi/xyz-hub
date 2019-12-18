@@ -84,9 +84,9 @@ public class HealthApi extends Api {
 
   private static URI getPublicServiceEndpoint() {
     try {
-      return new URI(Service.configuration.XYZ_HUB_PUBLIC_PROTOCOL,null,
-              Service.configuration.XYZ_HUB_PUBLIC_HOST, Service.configuration.XYZ_HUB_PUBLIC_PORT,
-              MAIN_HEALTCHECK_ENDPOINT, null, null);
+      return new URI(Service.configuration.XYZ_HUB_PUBLIC_PROTOCOL, null,
+          Service.configuration.XYZ_HUB_PUBLIC_HOST, Service.configuration.XYZ_HUB_PUBLIC_PORT,
+          MAIN_HEALTCHECK_ENDPOINT, null, null);
     } catch (URISyntaxException e) {
       Logging.getLogger().error("Wrong format of public service endpoint URI: " + Service.configuration.XYZ_HUB_PUBLIC_HOST, e);
       return null;

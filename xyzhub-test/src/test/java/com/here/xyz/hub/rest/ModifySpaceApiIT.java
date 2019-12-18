@@ -42,7 +42,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     createSpace();
   }
 
@@ -52,7 +52,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void setSearchablePropertiesPositive() throws IOException {
+  public void setSearchablePropertiesPositive() {
     given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -67,7 +67,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void setSearchablePropertiesNegative() throws IOException {
+  public void setSearchablePropertiesNegative() {
     given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -80,7 +80,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void removeAllListeners() throws IOException {
+  public void removeAllListeners() {
     addListener("x-psql-test");
 
     given()
@@ -105,7 +105,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void removeAllProcessors() throws IOException {
+  public void removeAllProcessors() {
     addProcessor("x-psql-test");
 
     given()
@@ -130,7 +130,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void addProcessorToExistingSpace() throws IOException {
+  public void addProcessorToExistingSpace() {
     addProcessor("x-psql-test");
 
     given()
@@ -148,7 +148,7 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void testConnectorResponseInModifiedSpace() throws IOException {
+  public void testConnectorResponseInModifiedSpace() {
     addProcessor("x-psql-test");
 
     given()

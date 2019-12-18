@@ -22,7 +22,7 @@
       "warmUp": 1,
       "className": "com.here.xyz.psql.PSQLXyzConnector",
       "env": {
-        "PSQL_HOST": "dockerbridge",
+        "PSQL_HOST": "${PSQL_HOST}",
         "PSQL_USER": "postgres",
         "PSQL_PASSWORD": "password"
       }
@@ -116,7 +116,6 @@
     "id": "rule-tagger",
     "params": {},
     "capabilities": {
-      "relocationSupport": true,
       "maxUncompressedSize": 1,
       "preserializedResponseSupport": true
     },
@@ -154,7 +153,7 @@
       "warmUp": 0,
       "className": "com.here.xyz.psql.PSQLXyzConnector",
       "env": {
-        "PSQL_HOST": "dockerbridge",
+        "PSQL_HOST": "${PSQL_HOST}",
         "PSQL_USER": "postgres",
         "PSQL_PASSWORD": "password"
       }

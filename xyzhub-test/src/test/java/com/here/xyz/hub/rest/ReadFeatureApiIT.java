@@ -51,7 +51,7 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
   public static final String HUGE_RESPONSE_SPACE = "huge_response_test_";
 
   @BeforeClass
-  public static void setup() throws IOException {
+  public static void setup() {
     remove();
     createSpace();
     addFeatures();

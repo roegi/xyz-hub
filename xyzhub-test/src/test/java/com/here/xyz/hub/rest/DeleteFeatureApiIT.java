@@ -44,7 +44,7 @@ public class DeleteFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     createSpace();
     addFeatures();
   }

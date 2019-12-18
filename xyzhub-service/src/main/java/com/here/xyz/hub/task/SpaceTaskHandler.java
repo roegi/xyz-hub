@@ -361,7 +361,7 @@ public class SpaceTaskHandler {
         //Use the potentially modified spaceDefinition for writing
         JsonObject newInput = JsonObject.mapFrom(query.manipulatedSpaceDefinition);
         //Update the target and the flag if there is a difference between the latest head version and the new target version
-        entry.result = task.modifyOp.patch(entry.result, newInput);
+        entry.result = task.modifyOp.patch(entry.result, entry.result, newInput);
         entry.isModified = entry.isModified || !task.modifyOp.equalStates(entry.head, entry.result);
       }
 

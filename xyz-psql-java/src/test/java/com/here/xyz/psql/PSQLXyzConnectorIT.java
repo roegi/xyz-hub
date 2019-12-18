@@ -657,7 +657,7 @@ public class PSQLXyzConnectorIT {
     System.out.println(deleteResponse);
   }
 
-  @Test
+  //@Test
   public void testGetStatisticsEvent() throws Exception {
 
     // =========== INSERT ==========

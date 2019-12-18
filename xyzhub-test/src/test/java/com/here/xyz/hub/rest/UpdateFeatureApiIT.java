@@ -52,7 +52,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     remove();
     createSpace();
     addFeatures();
@@ -64,7 +64,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void postFeatureWithNumberId() throws IOException {
+  public void postFeatureWithNumberId() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -78,7 +78,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_put() throws IOException {
+  public void updateFeatureById_put() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -98,7 +98,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
 
 
   @Test
-  public void updateNonExistingFeatureById_put() throws IOException {
+  public void updateNonExistingFeatureById_put() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -117,7 +117,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateNonExistingFeatureByIdWithPrefix_put() throws IOException {
+  public void updateNonExistingFeatureByIdWithPrefix_put() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -136,7 +136,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateNonExistingSpace_put() throws IOException {
+  public void updateNonExistingSpace_put() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -149,7 +149,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_post() throws IOException {
+  public void updateFeatureById_post() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -168,7 +168,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureByIdWithPrefix_post() throws IOException {
+  public void updateFeatureByIdWithPrefix_post() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -187,7 +187,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateNonExistingSpace_post() throws IOException {
+  public void updateNonExistingSpace_post() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -206,7 +206,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_put_WithOtherOwner() throws IOException {
+  public void updateFeatureById_put_WithOtherOwner() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -219,7 +219,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_post_WithOtherOwner() throws IOException {
+  public void updateFeatureById_post_WithOtherOwner() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -232,7 +232,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_put_WithAllAccess() throws IOException {
+  public void updateFeatureById_put_WithAllAccess() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -245,7 +245,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_post_WithAllAccess() throws IOException {
+  public void updateFeatureById_post_WithAllAccess() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -258,7 +258,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeaturesWithEmptyFeatureCollection() throws IOException {
+  public void updateFeaturesWithEmptyFeatureCollection() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
@@ -272,7 +272,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateTheGeometryTypeWithPost() throws IOException {
+  public void updateTheGeometryTypeWithPost() {
     Feature point = Feature.createEmptyFeature()
         .withId("A001")
         .withGeometry(new Point().withCoordinates(new PointCoordinates(0, 1)));
@@ -306,7 +306,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateTheGeometryTypeWithPut() throws IOException {
+  public void updateTheGeometryTypeWithPut() {
     Feature point = Feature.createEmptyFeature()
         .withId("C001")
         .withGeometry(new Point().withCoordinates(new PointCoordinates(0, 1)));
@@ -341,7 +341,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void testReadOnly() throws IOException {
+  public void testReadOnly() {
     given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).

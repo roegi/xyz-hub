@@ -34,7 +34,6 @@ import static org.hamcrest.core.CombinableMatcher.either;
 
 import com.here.xyz.hub.rest.RestAssuredTest;
 import com.jayway.restassured.response.ValidatableResponse;
-import java.io.IOException;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -66,7 +65,7 @@ public class AuthTestsIT extends RestAssuredTest {
     }
   }
 
-  private static ValidatableResponse createSpaceWithFeatures(String spaceFile, String featuresFile, AuthProfile profile) throws IOException {
+  private static ValidatableResponse createSpaceWithFeatures(String spaceFile, String featuresFile, AuthProfile profile) {
     cleanUpId = createSpace(spaceFile, profile)
         .statusCode(OK.code()).extract().path("id");
 
@@ -88,7 +87,7 @@ public class AuthTestsIT extends RestAssuredTest {
         .get("/spaces/" + spaceId).then();
   }
 
-  private static ValidatableResponse createSpace(String fileName, AuthProfile profile) throws IOException {
+  private static ValidatableResponse createSpace(String fileName, AuthProfile profile) {
     return given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -141,7 +140,7 @@ public class AuthTestsIT extends RestAssuredTest {
         .then();
   }
 
-  private static ValidatableResponse testSpaceListWithShared(String owner, AuthProfile profile) throws IOException {
+  private static ValidatableResponse testSpaceListWithShared(String owner, AuthProfile profile) {
     createSpace("/xyz/hub/auth/createSharedSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN)
         .statusCode(OK.code());
 
@@ -151,7 +150,7 @@ public class AuthTestsIT extends RestAssuredTest {
     return getSpacesList(owner, profile);
   }
 
-  private static ValidatableResponse testSpaceListWithShared(String owner) throws IOException {
+  private static ValidatableResponse testSpaceListWithShared(String owner) {
     return testSpaceListWithShared(owner, AuthProfile.ACCESS_OWNER_2);
   }
 
@@ -161,44 +160,44 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void createDefaultSpaceNegative() throws IOException {
+  public void createDefaultSpaceNegative() {
     createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.ACCESS_OWNER_1_WITH_FEATURES_ONLY)
         .statusCode(FORBIDDEN.code());
   }
 
   @Test
-  public void createDefaultSpacePositive() throws IOException {
+  public void createDefaultSpacePositive() {
     createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN)
         .statusCode(OK.code())
         .body("id", notNullValue());
   }
 
   @Test
-  public void createPsqlSpaceNegative() throws IOException {
+  public void createPsqlSpaceNegative() {
     createSpace("/xyz/hub/auth/createPsqlSpace.json", AuthProfile.STORAGE_AUTH_TEST_C1_ONLY)
         .statusCode(FORBIDDEN.code());
   }
 
   @Test
-  public void createPsqlSpacePositive() throws IOException {
+  public void createPsqlSpacePositive() {
     createSpace("/xyz/hub/auth/createPsqlSpace.json", AuthProfile.STORAGE_AUTH_TEST_PSQL_ONLY)
         .statusCode(OK.code());
   }
 
   @Test
-  public void createSpaceWithNoAccessNegative() throws IOException {
+  public void createSpaceWithNoAccessNegative() {
     createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.NO_ACCESS)
         .statusCode(FORBIDDEN.code());
   }
 
   @Test
-  public void createTestStorageSpaceNegative() throws IOException {
+  public void createTestStorageSpaceNegative() {
     createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_PSQL_ONLY)
         .statusCode(FORBIDDEN.code());
   }
 
   @Test
-  public void createTestStorageSpacePositive() throws IOException {
+  public void createTestStorageSpacePositive() {
     createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_C1_ONLY)
         .statusCode(OK.code())
         .body("owner", equalTo(AuthProfile.STORAGE_AUTH_TEST_C1_ONLY.payload.aid))
@@ -213,7 +212,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void updateSpaceStorageNegative() throws IOException {
+  public void updateSpaceStorageNegative() {
     createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_C1_ONLY)
         .statusCode(OK.code());
 
@@ -222,7 +221,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void updateSpaceStoragePositive() throws IOException {
+  public void updateSpaceStoragePositive() {
     createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_C1_ONLY)
         .statusCode(OK.code());
 
@@ -231,13 +230,13 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void createSpaceWithListenerPositive() throws IOException {
+  public void createSpaceWithListenerPositive() {
     createSpace("/xyz/hub/auth/createSpaceWithListener.json", AuthProfile.CONNECTOR_AUTH_TEST_C1_AND_C2)
         .statusCode(OK.code());
   }
 
   @Test
-  public void testSpaceListWithSharedOwnerDefault() throws IOException {
+  public void testSpaceListWithSharedOwnerDefault() {
     testSpaceListWithShared(null)
         .statusCode(OK.code())
         .body("$.size()", equalTo(1))
@@ -245,7 +244,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwnerMe() throws IOException {
+  public void testSpaceListWithSharedOwnerMe() {
     testSpaceListWithShared("me")
         .statusCode(OK.code())
         .body("$.size()", equalTo(1))
@@ -253,7 +252,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwnerOthers() throws IOException {
+  public void testSpaceListWithSharedOwnerOthers() {
     testSpaceListWithShared("others")
         .statusCode(OK.code())
         .body("$.size()", equalTo(1))
@@ -261,14 +260,14 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwnerOthersNegative() throws IOException {
+  public void testSpaceListWithSharedOwnerOthersNegative() {
     testSpaceListWithShared("others", AuthProfile.ACCESS_OWNER_1_ADMIN)
         .statusCode(OK.code())
         .body("$.size()", equalTo(0));
   }
 
   @Test
-  public void testSpaceListWithSharedOwnerAll() throws IOException {
+  public void testSpaceListWithSharedOwnerAll() {
     testSpaceListWithShared("*")
         .statusCode(OK.code())
         .body("$.size()", equalTo(2))
@@ -276,7 +275,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwnerAllNegative() throws IOException {
+  public void testSpaceListWithSharedOwnerAllNegative() {
     testSpaceListWithShared("*", AuthProfile.ACCESS_OWNER_1_ADMIN)
         .statusCode(OK.code())
         .body("$.size()", equalTo(1))
@@ -284,7 +283,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwner1() throws IOException {
+  public void testSpaceListWithSharedOwner1() {
     testSpaceListWithShared("XYZ-01234567-89ab-cdef-0123-456789aUSER1")
         .statusCode(OK.code())
         .body("$.size()", equalTo(1))
@@ -292,7 +291,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwner2() throws IOException {
+  public void testSpaceListWithSharedOwner2() {
     testSpaceListWithShared("XYZ-01234567-89ab-cdef-0123-456789aUSER2")
         .statusCode(OK.code())
         .body("$.size()", equalTo(1))
@@ -300,14 +299,14 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testSpaceListWithSharedOwner2Negative() throws IOException {
+  public void testSpaceListWithSharedOwner2Negative() {
     testSpaceListWithShared("XYZ-01234567-89ab-cdef-0123-456789aUSER2", AuthProfile.ACCESS_OWNER_1_ADMIN)
         .statusCode(OK.code())
         .body("$.size()", equalTo(0));
   }
 
   @Test
-  public void testSpaceListWithAccessAll() throws IOException {
+  public void testSpaceListWithAccessAll() {
     testSpaceListWithShared("*", AuthProfile.ACCESS_ALL)
         .statusCode(OK.code())
         .body("$.size()", equalTo(2))
@@ -315,7 +314,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testCreateSpaceWithPackage() throws IOException {
+  public void testCreateSpaceWithPackage() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2)
         .statusCode(FORBIDDEN.code())
         .extract()
@@ -338,7 +337,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testDeleteSpaceWithPackage() throws IOException {
+  public void testDeleteSpaceWithPackage() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
         .statusCode(OK.code())
         .extract()
@@ -368,7 +367,7 @@ public class AuthTestsIT extends RestAssuredTest {
 
 
   @Test
-  public void testDeleteSpaceWithManageSpacesPackage() throws IOException {
+  public void testDeleteSpaceWithManageSpacesPackage() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
         .statusCode(OK.code())
         .extract()
@@ -379,7 +378,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testModifyOwner1SpaceAddPackages() throws IOException {
+  public void testModifyOwner1SpaceAddPackages() {
     cleanUpId = createSpace("/xyz/hub/createSpaceWithoutId.json", AuthProfile.ACCESS_OWNER_1_NO_ADMIN)
         .statusCode(OK.code())
         .extract()
@@ -393,7 +392,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testModifyOwner2SpaceAddPackages() throws IOException {
+  public void testModifyOwner2SpaceAddPackages() {
     cleanUpId = createSpace("/xyz/hub/createSpaceWithoutId.json", AuthProfile.ACCESS_OWNER_2)
         .statusCode(OK.code())
         .extract()
@@ -416,7 +415,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testModifySpaceRemovePackages() throws IOException {
+  public void testModifySpaceRemovePackages() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
         .statusCode(OK.code())
         .extract()
@@ -433,7 +432,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testAddFeatureWithPackage() throws IOException {
+  public void testAddFeatureWithPackage() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createSpaceWithPackage.json",
         "/xyz/hub/processedData.json",
@@ -443,7 +442,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testListSpaceWithPackage() throws IOException {
+  public void testListSpaceWithPackage() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
         .statusCode(OK.code())
         .extract()
@@ -459,7 +458,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testGetSpaceWithPackageForbidden() throws IOException {
+  public void testGetSpaceWithPackageForbidden() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
         .statusCode(OK.code())
         .extract()
@@ -470,7 +469,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testGetSpaceWithPackageAccess() throws IOException {
+  public void testGetSpaceWithPackageAccess() {
     cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithPackage.json", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
         .statusCode(OK.code())
         .extract()
@@ -483,7 +482,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testListFeaturesWithPackageAccess() throws IOException {
+  public void testListFeaturesWithPackageAccess() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createSpaceWithPackage.json",
         "/xyz/hub/processedData.json",
@@ -503,7 +502,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testGetFeatureWithPackageAccess() throws IOException {
+  public void testGetFeatureWithPackageAccess() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createSpaceWithPackage.json",
         "/xyz/hub/processedData.json",
@@ -530,7 +529,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testDeleteFeatureWithPackageAccess() throws IOException {
+  public void testDeleteFeatureWithPackageAccess() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createSpaceWithPackage.json",
         "/xyz/hub/processedData.json",
@@ -555,7 +554,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testUpdateFeatureWithPackageAccess() throws IOException {
+  public void testUpdateFeatureWithPackageAccess() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createSpaceWithPackage.json",
         "/xyz/hub/processedData.json",
@@ -590,7 +589,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testCreateFeatureWithPackageAccess() throws IOException {
+  public void testCreateFeatureWithPackageAccess() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createSpaceWithPackage.json",
         "/xyz/hub/processedData.json",
@@ -620,7 +619,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testCreateSpaceWithSearchablePropertiesNoAdmin() throws IOException {
+  public void testCreateSpaceWithSearchablePropertiesNoAdmin() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -636,7 +635,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testCreateSpaceWithSearchablePropertiesAdmin() throws IOException {
+  public void testCreateSpaceWithSearchablePropertiesAdmin() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -652,7 +651,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testCreateSpaceWithSearchableProperties() throws IOException {
+  public void testCreateSpaceWithSearchableProperties() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -671,7 +670,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testListFeaturesByBBoxWithClusteringNegative() throws IOException {
+  public void testListFeaturesByBBoxWithClusteringNegative() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createDefaultSpace.json",
         "/xyz/hub/processedData.json",
@@ -697,7 +696,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testListFeaturesByBBoxWithClusteringPositive() throws IOException {
+  public void testListFeaturesByBBoxWithClusteringPositive() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createDefaultSpace.json",
         "/xyz/hub/processedData.json",
@@ -715,7 +714,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testListFeaturesByTileIdWithClusteringNegative() throws IOException {
+  public void testListFeaturesByTileIdWithClusteringNegative() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createDefaultSpace.json",
         "/xyz/hub/processedData.json",
@@ -741,7 +740,7 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void testListFeaturesByTileIdWithClusteringPositive() throws IOException {
+  public void testListFeaturesByTileIdWithClusteringPositive() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createDefaultSpace.json",
         "/xyz/hub/processedData.json",
@@ -756,5 +755,25 @@ public class AuthTestsIT extends RestAssuredTest {
         .get("/spaces/x-auth-test-space/tile/quadkey/120?clustering=hexbin")
         .then()
         .statusCode(either(is(200)).or(is(502)));
+  }
+
+  @Test
+  public void createSpaceWithCompressedJWT() {
+    createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN_COMPRESSED)
+        .statusCode(OK.code())
+        .body("id", notNullValue());
+  }
+
+  @Test
+  public void createSpaceWithCompressedJWTOnAccessTokenQueryParam() {
+    given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .body(content("/xyz/hub/auth/createDefaultSpace.json"))
+        .when()
+        .post("/spaces?access_token=" + AuthProfile.ACCESS_OWNER_1_ADMIN_COMPRESSED.jwt_string)
+        .then()
+        .statusCode(OK.code())
+        .body("id", notNullValue());
   }
 }

@@ -22,6 +22,7 @@ package com.here.xyz.hub.rest;
 import com.here.xyz.hub.auth.TestAuthenticator;
 import com.jayway.restassured.RestAssured;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import org.apache.commons.io.IOUtils;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -33,10 +34,6 @@ public class RestAssuredTest extends TestAuthenticator {
         RestAssured.baseURI = RestAssuredConfig.config().baseURI;
         RestAssured.port = RestAssuredConfig.config().port;
         RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
-    }
-
-    protected static String content(String file) throws IOException {
-        return IOUtils.toString(RestAssuredTest.class.getResourceAsStream(file), "UTF-8");
     }
 
     @AfterClass

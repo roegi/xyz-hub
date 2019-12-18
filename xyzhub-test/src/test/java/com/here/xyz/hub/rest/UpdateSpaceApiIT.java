@@ -34,7 +34,7 @@ import org.junit.Test;
 public class UpdateSpaceApiIT extends TestSpaceWithFeature {
 
     @BeforeClass
-    public static void setup() throws IOException {
+    public static void setup() {
         remove();
         createSpace();
     }
@@ -47,7 +47,7 @@ public class UpdateSpaceApiIT extends TestSpaceWithFeature {
     //TODO: Add tests for changing the owner of a space (positive & negative)
 
     @Test
-    public void updateSpace() throws IOException {
+    public void updateSpace() {
         final ValidatableResponse response = given().
             accept(APPLICATION_JSON).
             contentType(APPLICATION_JSON).

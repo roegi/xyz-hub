@@ -40,7 +40,7 @@ public class StoreFeaturesApiIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     remove();
     createSpace();
   }
@@ -51,7 +51,7 @@ public class StoreFeaturesApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void putFeatures() throws IOException {
+  public void putFeatures() {
     given().
         contentType(APPLICATION_GEO_JSON).
         accept("application/x-empty").
@@ -64,7 +64,7 @@ public class StoreFeaturesApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void putFeatureCollectionWithoutFeatureType() throws IOException {
+  public void putFeatureCollectionWithoutFeatureType() {
     given().
         contentType(APPLICATION_GEO_JSON).
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).

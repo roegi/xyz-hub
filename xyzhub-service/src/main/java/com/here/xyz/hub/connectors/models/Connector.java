@@ -138,7 +138,7 @@ public class Connector {
 
     /**
      * Whether it's supported to configure the searchableProperties of spaces. (Only applicable for storage connectors) See: {@link
-     * Space#searchableProperties}
+     * Space#getSearchableProperties()}
      */
     public boolean searchablePropertiesConfiguration;
 

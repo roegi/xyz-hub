@@ -49,14 +49,14 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void basicCreateSpace() throws IOException {
+  public void basicCreateSpace() {
     cleanUpId = "x-psql-test";
     createSpace();
   }
 
 
   @Test
-  public void createSpaceWithTheSameId() throws IOException {
+  public void createSpaceWithTheSameId() {
     cleanUpId = "x-psql-test";
     given()
         .contentType(APPLICATION_JSON)
@@ -83,7 +83,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithoutId() throws IOException {
+  public void createSpaceWithoutId() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -105,7 +105,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithSearchablePropertiesPositive() throws IOException {
+  public void createSpaceWithSearchablePropertiesPositive() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -124,7 +124,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithSearchablePropertiesNegative() throws IOException {
+  public void createSpaceWithSearchablePropertiesNegative() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -141,7 +141,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithInvalidJson() throws IOException {
+  public void createSpaceWithInvalidJson() {
     given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -154,7 +154,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithCopyright() throws IOException {
+  public void createSpaceWithCopyright() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -175,7 +175,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithListener() throws IOException {
+  public void createSpaceWithListener() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -198,7 +198,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithProcessor() throws IOException {
+  public void createSpaceWithProcessor() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -229,7 +229,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithPsql() throws IOException {
+  public void createSpaceWithPsql() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -247,7 +247,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithListenerUnauthorized() throws IOException {
+  public void createSpaceWithListenerUnauthorized() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -280,7 +280,7 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void createSpaceWithNotAllowedStorage() throws IOException {
+  public void createSpaceWithNotAllowedStorage() {
     final ValidatableResponse response = given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -329,5 +329,21 @@ public class CreateSpaceApiIT extends TestSpaceWithFeature {
     response
         .statusCode(BAD_REQUEST.code())
         .body("errorMessage", equalTo("The property client is over the allowed limit of 1024 bytes."));
+  }
+
+  @Test
+  public void createSpaceWithInvalidListeners() {
+    final ValidatableResponse response = given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_NO_ADMIN))
+        .body("{\"title\":\"test\", \"description\":\"test\", \"listeners\":{\"a\":{}}}}")
+        .when()
+        .post("/spaces")
+        .then();
+
+    cleanUpId = response.extract().path("id");
+
+    response.statusCode(BAD_REQUEST.code());
   }
 }

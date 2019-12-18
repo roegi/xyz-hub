@@ -79,7 +79,7 @@ public class Service implements Logging {
   /**
    * The log4J2 console configuration
    */
-  private static final String CONSOLE_LOG_CONFIG = "log4j2-console.json";
+  private static final String CONSOLE_LOG_CONFIG = "log4j2-console-json.json";
 
   /**
    * The entry point to the Vert.x core API.
@@ -123,7 +123,8 @@ public class Service implements Logging {
     Configurator.initialize("default", CONSOLE_LOG_CONFIG);
     final ConfigStoreOptions fileStore = new ConfigStoreOptions().setType("file").setConfig(new JsonObject().put("path", "config.json"));
     final ConfigStoreOptions envConfig = new ConfigStoreOptions().setType("env");
-    final ConfigRetrieverOptions options = new ConfigRetrieverOptions().addStore(fileStore).addStore(envConfig);
+    final ConfigStoreOptions sysConfig = new ConfigStoreOptions().setType("sys");
+    final ConfigRetrieverOptions options = new ConfigRetrieverOptions().addStore(fileStore).addStore(envConfig).addStore(sysConfig);
     boolean debug = Arrays.asList(arguments).contains("--debug");
 
     final VertxOptions vertxOptions = new VertxOptions();
@@ -254,7 +255,6 @@ public class Service implements Logging {
    */
   @JsonIgnoreProperties(ignoreUnknown = true)
   public static class Config {
-
     public int HTTP_PORT;
     public String XYZ_HUB_REDIS_HOST;
     public int XYZ_HUB_REDIS_PORT;
@@ -266,10 +266,12 @@ public class Service implements Logging {
     public String LOGGING_TYPE;
     public String LOG_PATH;
     public boolean INSERT_LOCAL_CONNECTORS;
+    public String PSQL_HOST;
 
     public String STORAGE_DB_URL;
     public String STORAGE_DB_USER;
     public String STORAGE_DB_PASSWORD;
+
     public String SPACES_DYNAMODB_TABLE_ARN;
     public String CONNECTORS_DYNAMODB_TABLE_ARN;
     public String PACKAGES_DYNAMODB_TABLE_ARN;

@@ -148,10 +148,10 @@ public class AbstractConnectorHandlerTest {
     FeatureCollection result = XyzSerializable.deserialize(stringBuilder.toString());
   }
 
-  // This is a test for the relocation client. To run it, valid credentials are required.
- //  @Test
+  //This is a test for the relocation client. To run it, valid credentials are required.
+  //@Test
   public void testRelocatedEvent() throws Exception {
-    RelocationClient client = new RelocationClient("xyz-hub-sit-s3bucket-1y59epmy6s00");
+    RelocationClient client = new RelocationClient("some-s3-bucket-name");
     byte[] bytes = client.relocate("STREAM_ID_EXAMPLE", HealthCheckEventString.getBytes(StandardCharsets.UTF_8));
     RelocatedEvent relocated = XyzSerializable.deserialize(new ByteArrayInputStream(bytes));
 

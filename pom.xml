@@ -26,7 +26,6 @@
   </organization>
 
   <licenses>
-    <!-- Include only licenses found in repository and not its dependencies -->
     <license>
       <comments>SPDX-License-Identifier: Apache-2.0</comments>
       <distribution>repo</distribution>
@@ -42,7 +41,7 @@
 
   <groupId>com.here.xyz</groupId>
   <artifactId>xyzhub-aggregator</artifactId>
-  <version>0.0.20-SNAPSHOT</version>
+  <version>0.0.24-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <modules>
@@ -492,4 +491,29 @@
 
     </dependencies>
   </dependencyManagement>
+
+  <repositories>
+    <repository>
+      <id>boundless</id>
+      <layout>default</layout>
+      <name>boundless-repo</name>
+      <releases>
+        <checksumPolicy>warn</checksumPolicy>
+        <enabled>true</enabled>
+      </releases>
+      <url>https://repo.boundlessgeo.com/main/</url>
+    </repository>
+
+    <repository>
+      <id>geomajas</id>
+      <layout>default</layout>
+      <name>geomajas-repo</name>
+      <releases>
+        <checksumPolicy>warn</checksumPolicy>
+        <enabled>true</enabled>
+      </releases>
+      <url>http://maven.geomajas.org/</url>
+    </repository>
+  </repositories>
+
 </project>

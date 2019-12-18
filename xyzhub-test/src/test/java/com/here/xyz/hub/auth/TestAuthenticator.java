@@ -19,8 +19,13 @@
 
 package com.here.xyz.hub.auth;
 
+import com.here.xyz.hub.rest.RestAssuredTest;
+import io.vertx.core.json.DecodeException;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
+import org.apache.commons.io.IOUtils;
 
 public class TestAuthenticator {
 
@@ -28,6 +33,14 @@ public class TestAuthenticator {
     HashMap<String, String> authHeaders = new HashMap<>();
     authHeaders.put("Authorization", "Bearer " + authProfile.jwt_string);
     return authHeaders;
+  }
+
+  protected static String content(String file) {
+    try {
+      return IOUtils.toString(TestAuthenticator.class.getResourceAsStream(file), StandardCharsets.UTF_8).trim();
+    } catch (IOException e) {
+      throw new RuntimeException("Error while reading token from resource file: " + file, e);
+    }
   }
 
   public enum AuthProfile {
@@ -58,15 +71,27 @@ public class TestAuthenticator {
     ACCESS_OWNER_1_MANAGE_ALL_SPACES_ONLY,
     ACCESS_OWNER_2_WITH_FEATURES_ADMIN_ALL_SPACES,
     ACCESS_OWNER_3,
-    ACCESS_OWNER_1_READ_ALL_FEATURES;
+    ACCESS_OWNER_1_READ_ALL_FEATURES,
+    ACCESS_OWNER_1_ADMIN_COMPRESSED;
 
     public final String jwt_string;
     public final JWTPayload payload;
 
     AuthProfile() {
-      String resourceFilename = "/auth/" + name() + ".json";
-      this.payload = JwtGenerator.readTokenPayload(resourceFilename);
-      jwt_string = JwtGenerator.generateToken(this.payload);
+      final String resourceFilename = "/auth/" + name() + ".json";
+      JWTPayload tmpPayload;
+      String tmpJWT;
+
+      try {
+        tmpPayload = JwtGenerator.readTokenPayload(resourceFilename);
+        tmpJWT = JwtGenerator.generateToken(tmpPayload);
+      } catch (DecodeException e) {
+        tmpPayload = new JWTPayload();
+        tmpJWT = content(resourceFilename);
+      }
+
+      this.payload = tmpPayload;
+      this.jwt_string = tmpJWT;
     }
   }
 }

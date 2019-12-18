@@ -49,7 +49,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     createSpace();
   }
 
@@ -301,7 +301,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSharedSpaceWithOtherOwner() throws IOException {
+  public void readSharedSpaceWithOtherOwner() {
     //Publish space from OWNER_1
     publishSpace("x-psql-test");
 
@@ -315,7 +315,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSpaceWithAccessConnectors() throws IOException {
+  public void readSpaceWithAccessConnectors() {
     addListener("x-psql-test");
 
     given()
@@ -331,7 +331,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSpaceWithNoAccessConnectors() throws IOException {
+  public void readSpaceWithNoAccessConnectors() {
     addListener("x-psql-test");
 
     given()
@@ -345,7 +345,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSpacesWithOwnerStar() throws IOException {
+  public void readSpacesWithOwnerStar() {
     cleanUpIds.add(createSpace(AuthProfile.ACCESS_OWNER_2, SHARED, true));
     cleanUpIds.add(createSpace(AuthProfile.ACCESS_OWNER_2, OTHER, false));
 
@@ -431,7 +431,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSpacesWithOwnerMe() throws IOException {
+  public void readSpacesWithOwnerMe() {
     cleanUpIds.add(createSpace(AuthProfile.ACCESS_OWNER_2, "shared", true));
     cleanUpIds.add(createSpace(AuthProfile.ACCESS_OWNER_2, "other", false));
 
@@ -516,7 +516,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSpacesWithOwnerOthers() throws IOException {
+  public void readSpacesWithOwnerOthers() {
     cleanUpIds.add(createSpace(AuthProfile.ACCESS_OWNER_2, "shared", true));
     cleanUpIds.add(createSpace(AuthProfile.ACCESS_OWNER_2, "other", false));
 

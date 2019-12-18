@@ -41,7 +41,7 @@ public class DeleteSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Before
-  public void setup() throws IOException {
+  public void setup() {
     createSpace();
   }
 
@@ -100,7 +100,7 @@ public class DeleteSpaceApiIT extends TestSpaceWithFeature {
    * Tests whether the underlying data storage actually was cleaned up during the previous deletion.
    */
   @Test
-  public void createSpaceWithSameName() throws IOException {
+  public void createSpaceWithSameName() {
     addFeatures();
     remove();
     createSpace();

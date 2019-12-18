@@ -39,16 +39,18 @@ public class RelocationClient {
 
   private static final Logger logger = LoggerFactory.getLogger(AbstractConnectorHandler.class);
   private final static String S3_PATH = "tmp/";
-  private final AmazonS3 s3client;
+  private volatile AmazonS3 s3client;
   private final String bucket;
 
   public RelocationClient(String bucket) {
-    this(AmazonS3ClientBuilder.standard().withCredentials(new DefaultAWSCredentialsProviderChain()).build(), bucket);
+    this.bucket = bucket;
   }
 
-  public RelocationClient(AmazonS3 s3client, String bucket) {
-    this.s3client = s3client;
-    this.bucket = bucket;
+  private AmazonS3 getS3client() {
+    if (s3client == null) {
+      s3client = AmazonS3ClientBuilder.standard().withCredentials(new DefaultAWSCredentialsProviderChain()).build();
+    }
+    return s3client;
   }
 
   /**
@@ -108,7 +110,7 @@ public class RelocationClient {
    * Downloads the file form S3.
    */
   public InputStream downloadFromS3(AmazonS3URI amazonS3URI) throws IOException {
-    return Payload.prepareInputStream(s3client.getObject(amazonS3URI.getBucket(), amazonS3URI.getKey()).getObjectContent());
+    return Payload.prepareInputStream(getS3client().getObject(amazonS3URI.getBucket(), amazonS3URI.getKey()).getObjectContent());
   }
 
   /**
@@ -117,6 +119,6 @@ public class RelocationClient {
   private void uploadToS3(AmazonS3URI amazonS3URI, byte[] content) {
     ObjectMetadata metaData = new ObjectMetadata();
     metaData.setContentLength(content.length);
-    s3client.putObject(amazonS3URI.getBucket(), amazonS3URI.getKey(), new ByteArrayInputStream(content), metaData);
+    getS3client().putObject(amazonS3URI.getBucket(), amazonS3URI.getKey(), new ByteArrayInputStream(content), metaData);
   }
 }

@@ -168,7 +168,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void testFailedEntries() throws IOException {
+  public void testFailedEntries() {
     cleanUpId = "x-failing";
     given().
         contentType(APPLICATION_JSON).
@@ -194,7 +194,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void testErrorAndFailed() throws IOException {
+  public void testErrorAndFailed() {
     cleanUpId = "x-failing";
     given().
         contentType(APPLICATION_JSON).
@@ -221,7 +221,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void testsExceptionPreProcessor() throws IOException {
+  public void testsExceptionPreProcessor() {
     cleanUpId = "x-failing";
     given().
         contentType(APPLICATION_JSON).

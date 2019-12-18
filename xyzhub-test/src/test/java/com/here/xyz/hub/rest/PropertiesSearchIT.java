@@ -38,7 +38,7 @@ import org.junit.Test;
 public class PropertiesSearchIT extends TestSpaceWithFeature {
 
   @BeforeClass
-  public static void setup() throws IOException {
+  public static void setup() {
     remove();
     createSpace();
     addFeatures();
@@ -108,7 +108,7 @@ public class PropertiesSearchIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void errorTest() throws IOException {
+  public void errorTest() {
     final ValidatableResponse response = given().
         contentType(APPLICATION_JSON).
         accept(APPLICATION_JSON).
