@@ -19,4 +19,4 @@ EXPOSE 8080 8181
 
 CMD java -jar xyzhub-service.jar
 
-ADD Dockerfile-cicd /
+ADD Dockerfile /
