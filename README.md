@@ -29,6 +29,7 @@ This project is _experimental and work in progress_.
  * Maven 3.6+
  * Postgres 9.6+ with PostGIS 2.5+
  * Redis 5+ (optional)
+ * Amazon DynamoDB (optional)
  * Docker 18+ (optional)
  * Docker Compose 1.24+  (optional)
 
