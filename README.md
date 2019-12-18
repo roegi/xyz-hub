@@ -69,7 +69,7 @@ java -jar xyz-hub-service/target/xyz-hub-service.jar -DHTTP_PORT=9090
 ```
 
 ### Configuration options
-The service start parameters could be specified by editing the [default config file](./src/main/resources/config.json), using environment variables or system properties. See the default list of  [configuration parameters](https://github.com/heremaps/xyz-hub/wiki/Configuration-parameters) and their default values.
+The service start parameters could be specified by editing the [default config file](./xyz-hub-service/src/main/resources/config.json), using environment variables or system properties. See the default list of  [configuration parameters](https://github.com/heremaps/xyz-hub/wiki/Configuration-parameters) and their default values.
 
 # Usage
 
