@@ -73,13 +73,13 @@ The service start parameters could be specified by editing the [default config f
 
 # Usage
 
-When the service is running, you can start creating Spaces and Features, like:
+Start using the service by creating a _space_:
 
 ```bash
 curl -H "content-type:application/json" -d '{"title": "my first space", "description": "my first geodata repo"}' http://localhost:8080/hub/spaces
 ```
 
-The service will respond with the space id and some other parameters:
+The service will respond with the space definition including the space ID:
 
 ```json
 {
@@ -102,12 +102,12 @@ The service will respond with the space id and some other parameters:
 }
 ```
 
-You can use now the space id to add Features to your brand new space:
+You can use now the space id to add _features_ to your brand new space:
 ```bash
 curl -H "content-type:application/geo+json" -d '{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[-2.960847,53.430828]},"properties":{"name":"Anfield","@ns:com:here:xyz":{"tags":["football","stadium"]},"amenity":"Football Stadium","capacity":54074,"description":"Home of Liverpool Football Club"}}]}' http://localhost:8080/hub/spaces/pvhQepar/features
 ```
 
-The service will respond now with the inserted geo features:
+The service will respond with the inserted geo features:
 ```json
 {
     "type": "FeatureCollection",
