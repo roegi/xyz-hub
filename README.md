@@ -149,7 +149,7 @@ XYZ Hub uses:
 * [JTS](https://github.com/locationtech/jts)
 * [Jackson](https://github.com/FasterXML/jackson)
 
-and [others](./pom.xml#L192-L494).
+and [others](./pom.xml#L177-L479).
 
 # Contributing
 
