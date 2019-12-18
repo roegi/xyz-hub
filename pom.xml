@@ -54,8 +54,8 @@
 
   <scm>
     <url>https://github.com/heremaps/xyz-hub</url>
-    <connection>scm:git:git://github.com/heremaps/xyz-hub</connection>
-    <developerConnection>scm:git:ssh://git@github.com/heremaps/xyz-hub</developerConnection>
+    <connection>scm:git:git://github.com/heremaps/xyz-hub.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/heremaps/xyz-hub.git</developerConnection>
     <tag>HEAD</tag>
   </scm>
 
