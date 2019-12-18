@@ -39,7 +39,7 @@
 
   <name>XYZ Hub Service</name>
   <description>XYZ Hub Service</description>
-  <artifactId>xyzhub-service</artifactId>
+  <artifactId>xyz-hub-service</artifactId>
   <packaging>jar</packaging>
 
   <properties>
@@ -106,7 +106,7 @@
                   </excludes>
                 </filter>
               </filters>
-              <finalName>xyzhub-service</finalName>
+              <finalName>xyz-hub-service</finalName>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.here.xyz.hub.Service</mainClass>

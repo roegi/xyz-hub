@@ -45,8 +45,8 @@
   <packaging>pom</packaging>
 
   <modules>
-    <module>xyzhub-service</module>
-    <module>xyzhub-test</module>
+    <module>xyz-hub-service</module>
+    <module>xyz-hub-test</module>
     <module>xyz-models</module>
     <module>xyz-connectors</module>
     <module>xyz-psql-java</module>
@@ -204,7 +204,7 @@
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>xyzhub-service</artifactId>
+        <artifactId>xyz-hub-service</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

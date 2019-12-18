@@ -39,7 +39,7 @@
 
   <name>XYZ Hub Test</name>
   <description>XYZ Hub integration tests</description>
-  <artifactId>xyzhub-test</artifactId>
+  <artifactId>xyz-hub-test</artifactId>
   <packaging>jar</packaging>
 
   <properties>
@@ -83,7 +83,7 @@
   <dependencies>
     <dependency>
       <groupId>${project.groupId}</groupId>
-      <artifactId>xyzhub-service</artifactId>
+      <artifactId>xyz-hub-service</artifactId>
     </dependency>
 
     <dependency>
