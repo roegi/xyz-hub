@@ -2,8 +2,9 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-XYZ Hub is a RESTful web service for access and management of geospataial data.
+XYZ Hub is a RESTful web service for access and management of geospataial data. This project is experimental and work in progress.
 
+# Overview
 Some of the features of XYZ Hub are:
 * Organize geo datasets in _spaces_
 * Store and manipulate individual geo features
@@ -20,7 +21,7 @@ You can find more information in the [XYZ Docs](https://www.here.xyz/api) and in
 
 XYZ Hub uses is [GeoJSON](https://tools.ietf.org/html/rfc79460) as the main geospataial data exchange format. Tiled data can also be provided as [MVT](https://github.com/mapbox/vector-tile-spec/blob/master/2.1/README.md). 
 
-This project is experimental and work in progress.
+
 
 # Prerequisites
 
