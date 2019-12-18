@@ -103,7 +103,7 @@ The service will respond with the space definition including the space ID:
 }
 ```
 
-You can use now the space id to add _features_ to your brand new space:
+You can now add _features_ to your brand new space:
 ```bash
 curl -H "content-type:application/geo+json" -d '{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[-2.960847,53.430828]},"properties":{"name":"Anfield","@ns:com:here:xyz":{"tags":["football","stadium"]},"amenity":"Football Stadium","capacity":54074,"description":"Home of Liverpool Football Club"}}]}' http://localhost:8080/hub/spaces/pvhQepar/features
 ```
