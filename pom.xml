@@ -40,7 +40,7 @@
   <inceptionYear>2018</inceptionYear>
 
   <groupId>com.here.xyz</groupId>
-  <artifactId>xyzhub-aggregator</artifactId>
+  <artifactId>xyz-hub</artifactId>
   <version>0.0.24-SNAPSHOT</version>
   <packaging>pom</packaging>
 
