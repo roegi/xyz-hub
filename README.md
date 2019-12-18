@@ -59,15 +59,13 @@ mvn clean install -Pdocker
 The service could also be started directly as a fat jar. In this case Postgres and the other optional dependencies need to be started separately.
 
 ```bash
-cd xyz-hub-service/target
-java -jar xyz-hub-service.jar [OPTIONS]
+java -jar xyz-hub-service/target/xyz-hub-service.jar [OPTIONS]
 ```
 
-e.g.
+Example:
 
 ```bash
-cd xyz-hub-service/target
-java -jar xyz-hub-service.jar -DHTTP_PORT=9090
+java -jar xyz-hub-service/target/xyz-hub-service.jar -DHTTP_PORT=9090
 ```
 
 ### Configuration options
