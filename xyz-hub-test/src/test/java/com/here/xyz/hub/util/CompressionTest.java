@@ -30,7 +30,7 @@ public class CompressionTest {
   public void testDeflateInflate() throws DataFormatException {
     final StringBuilder a = new StringBuilder();
 
-    for (int i=0; i<1000000; i++) {
+    for (int i=0; i<1000; i++) {
       a.append("isaudhciu q4789hf9eriu f9q8e47h f9ehq49 sadiuh iusadhiu adisuhiu adisiuhasdiuhiu fasd dfdf");
     }
 
