@@ -1,4 +1,4 @@
-# <img align="left" src="xyz.svg" width="70" height="70"/> XYZ Hub
+![XYZ Hub](xyz.svg)
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
