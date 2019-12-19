@@ -493,8 +493,9 @@ public class PSQLXyzConnector extends PSQLRequestStreamHandler {
     final SQLQuery query;
     final SQLQuery searchQuery = generateSearchQuery(event);
 
-    final SQLQuery geoQuery = new SQLQuery("ST_Intersects(geo, ST_Buffer(ST_GeomFromText('"
-        +WKTHelper.geometryToWKB(geometry)+"')::geography, ? )::geometry)",radius);
+    final SQLQuery geoQuery = radius != 0 ? new SQLQuery("ST_Intersects(geo, ST_Buffer(ST_GeomFromText('"
+        +WKTHelper.geometryToWKB(geometry)+"')::geography, ? )::geometry)",radius) : new SQLQuery("ST_Intersects(geo, ST_GeomFromText('"
+            +WKTHelper.geometryToWKB(geometry)+"',4326))");
 
     if (searchQuery == null) {
       query = new SQLQuery("SELECT");

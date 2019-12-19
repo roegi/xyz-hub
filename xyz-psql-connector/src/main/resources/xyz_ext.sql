@@ -82,6 +82,7 @@
 -- xyz_remove_unnecessary_idx				:	select xyz_remove_unnecessary_idx('xyz', 10000);
 -- xyz_qk_grird								:	select xyz_qk_grird(3)
 -- xyz_qk_child_calculation					:	select select * from xyz_qk_child_calculation('012',3,null)
+-- xyz_count_estimation                     :   select xyz_count_estimation('select 1')
 ---------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 -- xyz_qk_point2lrc							:	select * from xyz_qk_point2lrc( ST_GeomFromText( 'POINT( -64.78767  32.29703)' ), 3 );
@@ -137,9 +138,26 @@ DROP TYPE IF EXISTS rid_t;
 CREATE OR REPLACE FUNCTION xyz_ext_version()
   RETURNS integer AS
 $BODY$
- select 120
+ select 121
 $BODY$
   LANGUAGE sql IMMUTABLE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_count_estimation(query text)
+    RETURNS integer AS
+$BODY$
+DECLARE
+    rec   record;
+    rows  integer;
+BEGIN
+    FOR rec IN EXECUTE 'EXPLAIN ' || query LOOP
+            rows := substring(rec."QUERY PLAN" FROM ' rows=([[:digit:]]+)');
+            EXIT WHEN rows IS NOT NULL;
+        END LOOP;
+    RETURN rows;
+END;
+$BODY$
+    LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_qk_grird(lev integer)

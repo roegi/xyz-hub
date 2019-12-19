@@ -174,7 +174,7 @@ public class PSQLXyzConnectorIT {
   /**
    * Test getFeaturesByGeometryEvent
    */
-  //@Test
+  @Test
   public void testGetFeaturesByGeometryQuery() throws Exception {
     FeatureCollection collection = new FeatureCollection();
     List<Feature> featureList = new ArrayList<Feature>();
@@ -272,7 +272,7 @@ public class PSQLXyzConnectorIT {
     String queryResponse = invokeLambda(geometryEvent.serialize());
     FeatureCollection featureCollection = XyzSerializable.deserialize(queryResponse);
     assertNotNull(featureCollection);
-    assertEquals(103, featureCollection.getFeatures().size());
+    assertEquals(124, featureCollection.getFeatures().size());
     logger.info("Area Query with POLYGON tested successfully");
     // =========== QUERY WITH POLYGON WITH HOLE ==========
     LinearRingCoordinates holeCords = new LinearRingCoordinates();
@@ -298,7 +298,7 @@ public class PSQLXyzConnectorIT {
       }
       ;
     }
-    assertEquals(84, featureCollection.getFeatures().size());
+    assertEquals(114, featureCollection.getFeatures().size());
     logger.info("Area Query with POLYGON incl. hole tested successfully");
     // =========== QUERY WITH MULTIPOLYGON ==========
     PolygonCoordinates polyCoords2 = new PolygonCoordinates();
@@ -330,7 +330,7 @@ public class PSQLXyzConnectorIT {
       }
       ;
     }
-    assertEquals(174, featureCollection.getFeatures().size());
+    assertEquals(213, featureCollection.getFeatures().size());
     assertEquals(2, cnt);
     logger.info("Area Query with MULTIPOLYGON tested successfully");
     // =========== QUERY WITH MULTIPOLYGON + PROPERTIES_SEARCH ==========
@@ -349,7 +349,7 @@ public class PSQLXyzConnectorIT {
     queryResponse = invokeLambda(geometryEvent.serialize());
     featureCollection = XyzSerializable.deserialize(queryResponse);
     assertNotNull(featureCollection);
-    assertEquals(82, featureCollection.getFeatures().size());
+    assertEquals(121, featureCollection.getFeatures().size());
     logger.info("Area Query with MULTIPOLYGON + PROPERTIES_SEARCH tested successfully");
     // =========== QUERY WITH MULTIPOLYGON + SELECTION ==========
     geo = new MultiPolygon().withCoordinates(multiCords);
@@ -361,7 +361,7 @@ public class PSQLXyzConnectorIT {
     queryResponse = invokeLambda(geometryEvent.serialize());
     featureCollection = XyzSerializable.deserialize(queryResponse);
     assertNotNull(featureCollection);
-    assertEquals(174, featureCollection.getFeatures().size());
+    assertEquals(213, featureCollection.getFeatures().size());
 
     Properties properties = featureCollection.getFeatures().get(0).getProperties();
     assertEquals(new Integer(1), properties.get("foo2"));
@@ -580,6 +580,11 @@ public class PSQLXyzConnectorIT {
     features = featureCollection.getFeatures();
     assertNotNull(features);
     assertEquals(1, features.size());
+
+    // =========== DELETE SPACE ==========
+    String deleteSpaceResponse = invokeLambdaFromFile("/events/DeleteSpaceEvent.json");
+    assertDeleteSpaceResponse(deleteSpaceResponse);
+    logger.info("Delete space tested successfully - " + deleteSpaceResponse);
   }
 
 
@@ -657,7 +662,6 @@ public class PSQLXyzConnectorIT {
     System.out.println(deleteResponse);
   }
 
-  //@Test
   public void testGetStatisticsEvent() throws Exception {
 
     // =========== INSERT ==========
@@ -748,6 +752,10 @@ public class PSQLXyzConnectorIT {
       assertTrue(pKeys.contains(prop.getKey()));
       assertEquals(prop.getCount(), 11003);
     }
+    // =========== DELETE SPACE ==========
+    String deleteSpaceResponse = invokeLambdaFromFile("/events/DeleteSpaceEvent.json");
+    assertDeleteSpaceResponse(deleteSpaceResponse);
+    logger.info("Delete space tested successfully - " + deleteSpaceResponse);
   }
 
   //  @Test

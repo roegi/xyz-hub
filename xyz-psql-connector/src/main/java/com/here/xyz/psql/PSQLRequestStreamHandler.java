@@ -188,7 +188,7 @@ public abstract class PSQLRequestStreamHandler extends StorageConnector {
   public abstract PSQLConfig initializeConfig(Event event, Context context) throws Exception;
 
   private synchronized void setup() {
-    final int xyz_ext_version = 120;
+    final int xyz_ext_version = 121;
     boolean functionsUpToDate = false;
     boolean hasPropertySearch = (event.getConnectorParams() != null && event.getConnectorParams().get("propertySearch") == Boolean.TRUE);
 
