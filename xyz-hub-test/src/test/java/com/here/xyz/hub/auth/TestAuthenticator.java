@@ -19,8 +19,6 @@
 
 package com.here.xyz.hub.auth;
 
-import com.here.xyz.hub.rest.RestAssuredTest;
-import io.vertx.core.json.DecodeException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -71,27 +69,15 @@ public class TestAuthenticator {
     ACCESS_OWNER_1_MANAGE_ALL_SPACES_ONLY,
     ACCESS_OWNER_2_WITH_FEATURES_ADMIN_ALL_SPACES,
     ACCESS_OWNER_3,
-    ACCESS_OWNER_1_READ_ALL_FEATURES,
-    ACCESS_OWNER_1_ADMIN_COMPRESSED;
+    ACCESS_OWNER_1_READ_ALL_FEATURES;
 
     public final String jwt_string;
     public final JWTPayload payload;
 
     AuthProfile() {
-      final String resourceFilename = "/auth/" + name() + ".json";
-      JWTPayload tmpPayload;
-      String tmpJWT;
-
-      try {
-        tmpPayload = JwtGenerator.readTokenPayload(resourceFilename);
-        tmpJWT = JwtGenerator.generateToken(tmpPayload);
-      } catch (DecodeException e) {
-        tmpPayload = new JWTPayload();
-        tmpJWT = content(resourceFilename);
-      }
-
-      this.payload = tmpPayload;
-      this.jwt_string = tmpJWT;
+      String resourceFilename = "/auth/" + name() + ".json";
+      this.payload = JwtGenerator.readTokenPayload(resourceFilename);
+      jwt_string = JwtGenerator.generateToken(this.payload);
     }
   }
 }

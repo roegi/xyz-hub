@@ -33,7 +33,10 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.core.CombinableMatcher.either;
 
 import com.here.xyz.hub.rest.RestAssuredTest;
+import com.here.xyz.hub.util.Compression;
 import com.jayway.restassured.response.ValidatableResponse;
+import java.util.Base64;
+import java.util.zip.DataFormatException;
 import org.junit.After;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -758,20 +761,31 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
-  public void createSpaceWithCompressedJWT() {
-    createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN_COMPRESSED)
+  public void createSpaceWithCompressedJWT() throws DataFormatException {
+    final String compressedToken = Base64.getEncoder().encodeToString(Compression.compressUsingInflate(AuthProfile.ACCESS_OWNER_1_ADMIN.jwt_string.getBytes()));
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers("Authorization", "Bearer " + compressedToken)
+        .body(content("/xyz/hub/auth/createDefaultSpace.json"))
+        .when()
+        .post("/spaces")
+        .then()
         .statusCode(OK.code())
         .body("id", notNullValue());
   }
 
   @Test
-  public void createSpaceWithCompressedJWTOnAccessTokenQueryParam() {
+  public void createSpaceWithCompressedJWTOnAccessTokenQueryParam() throws DataFormatException {
+    final String compressedToken = Base64.getEncoder().encodeToString(Compression.compressUsingInflate(AuthProfile.ACCESS_OWNER_1_ADMIN.jwt_string.getBytes()));
+
     given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
         .body(content("/xyz/hub/auth/createDefaultSpace.json"))
         .when()
-        .post("/spaces?access_token=" + AuthProfile.ACCESS_OWNER_1_ADMIN_COMPRESSED.jwt_string)
+        .post("/spaces?access_token=" + compressedToken)
         .then()
         .statusCode(OK.code())
         .body("id", notNullValue());

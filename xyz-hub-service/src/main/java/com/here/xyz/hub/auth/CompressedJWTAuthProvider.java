@@ -19,6 +19,7 @@
 
 package com.here.xyz.hub.auth;
 
+import com.here.xyz.hub.util.Compression;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -27,12 +28,9 @@ import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.User;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.ext.auth.jwt.impl.JWTAuthProviderImpl;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.zip.DataFormatException;
-import java.util.zip.Inflater;
 import org.apache.commons.lang3.StringUtils;
 
 public class CompressedJWTAuthProvider extends JWTAuthProviderImpl {
@@ -47,22 +45,11 @@ public class CompressedJWTAuthProvider extends JWTAuthProviderImpl {
 
     if (!isJWT(jwt)) {
       try {
-        final Inflater inflater = new Inflater();
-        final ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        final byte[] buff = new byte[1024];
+        byte[] bytearray = Base64.getDecoder().decode(jwt.getBytes(StandardCharsets.UTF_8));
+        bytearray = Compression.decompressUsingInflate(bytearray);
 
-        inflater.setInput(Base64.getDecoder().decode(jwt.getBytes(StandardCharsets.UTF_8)));
-
-        while (!inflater.finished()) {
-          int count = inflater.inflate(buff);
-          bos.write(buff, 0, count);
-        }
-
-        inflater.end();
-        bos.close();
-
-        authInfo.put("jwt", new String(bos.toByteArray(), StandardCharsets.UTF_8));
-      } catch (DataFormatException | IOException e) {
+        authInfo.put("jwt", new String(bytearray, StandardCharsets.UTF_8));
+      } catch (DataFormatException e) {
         resultHandler.handle(Future.failedFuture("Wrong auth credentials format."));
         return;
       }
