@@ -3,8 +3,7 @@
 *.ipr
 .vertx/
 .idea/
-release.properties
 target/
 webroot/
 file-uploads/
-
+release.properties
