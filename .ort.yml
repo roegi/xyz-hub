@@ -30,7 +30,7 @@ curations:
       reason: "DATA_OF"
       comment: "The file contains all possible license identifiers for the content of a space."
       concluded_license: "Apache-2.0"
-    - path: "xyzhub-service/src/main/resources/openapi/*"
+    - path: "xyz-hub-service/src/main/resources/openapi/*"
       reason: "DATA_OF"
       comment: "The files found in this folder are part of the openapi specification and could have license keywords, therefore they should be ignored by the OSS scanner."
       concluded_license: "Apache-2.0"
