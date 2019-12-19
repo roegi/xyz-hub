@@ -169,7 +169,7 @@
     <!-- Embedded xyz lambdas -->
     <dependency>
       <groupId>${project.groupId}</groupId>
-      <artifactId>xyz-psql-java</artifactId>
+      <artifactId>xyz-psql-connector</artifactId>
       <exclusions>
         <exclusion>
           <artifactId>log4j-slf4j-impl</artifactId>

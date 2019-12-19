@@ -330,7 +330,7 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
 
   @Test
   public void testIterateSpaceWithInvalidHandle() {
-    // This internally causes a NumberFormatException and must result in a Bad Gateway.
+    //This internally causes a NumberFormatException and must result in a Bad Gateway.
     given()
         .accept(APPLICATION_GEO_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
@@ -342,7 +342,7 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
         .body("error", equalTo("BadGateway"))
         .body("errorMessage", equalTo("Connector error."));
 
-    // This special handle will (starting with xyz-psql-java version 1.2.33) cause an error response, which must as well result in a Bad Gateway.
+    //This special handle will (starting with xyz-psql-connector version 1.2.33) cause an error response, which must as well result in a Bad Gateway.
     given()
         .accept(APPLICATION_GEO_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))

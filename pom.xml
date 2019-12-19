@@ -195,7 +195,7 @@
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
-        <artifactId>xyz-psql-java</artifactId>
+        <artifactId>xyz-psql-connector</artifactId>
         <version>${project.version}</version>
       </dependency>
 
