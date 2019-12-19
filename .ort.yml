@@ -3,9 +3,6 @@ excludes:
   - pattern: "xyz-hub-test/**"
     reason: "TEST_TOOL_OF"
     comment: "This project contains only tests to verify correct functioning of XYZ Hub."
-  - pattern: "xyz-hub-service/src/main/resources/**"
-    reason: "DOCUMENTATION_OF"
-    comment: "This is the folder with the OpenAPI specification documents containing lists with acceptable licenses."
   scopes:
   - name: "provided"
     reason: "PROVIDED_BY"
