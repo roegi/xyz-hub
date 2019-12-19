@@ -181,12 +181,12 @@ public class AdminMessagesApiIT extends RestAssuredTest {
         });
   }
 
-  @Test
+  //@Test
   public void testSendTargetedMessageToNodeEndpoint() {
     testSendTargetedMessageWithSpec(true);
   }
 
-  @Test
+  //@Test
   public void testSendTargetedMessageThroughPublicEndpoint() {
     testSendTargetedMessageWithSpec(false);
   }
