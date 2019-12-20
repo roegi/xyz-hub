@@ -1,15 +1,25 @@
+curations:
+  license_findings:
+    - path: "xyz-models/src/main/java/com/here/xyz/models/hub/Space.java"
+      reason: "DATA_OF"
+      comment: "The file contains all possible license identifiers for the content of a space."
+      concluded_license: "Apache-2.0"
+    - path: "xyz-hub-service/src/main/resources/openapi/*"
+      reason: "DATA_OF"
+      comment: "The files found in this folder are part of the OpenAPI specification and could have license keywords, therefore they should be ignored by the OSS scanner."
+      concluded_license: "Apache-2.0"
 excludes:
   paths:
   - pattern: "xyz-hub-test/**"
     reason: "TEST_TOOL_OF"
-    comment: "This project contains only tests to verify correct functioning of XYZ Hub."
+    comment: "This directory only contains tests to verify correct functioning of XYZ Hub."
   scopes:
-  - name: "provided"
-    reason: "PROVIDED_BY"
-    comment: "These are dependencies provided by the JDK or container at runtime. They are not distributed in the context of this project."
-  - name: "test"
-    reason: "TEST_TOOL_OF"
-    comment: "These are dependencies used for testing. They are not distributed in the context of this project."
+  - pattern: "provided"
+    reason: "PROVIDED_DEPENDENCY_OF"
+    comment: "Scope with dependencies provided by the JDK or container at runtime. Not included in released artifacts."
+  - pattern: "test"
+    reason: "TEST_DEPENDENCY_OF"
+    comment: "Scope with dependencies only used for testing. Not included in released artifacts."
 resolutions:
   errors:
   - message: .*Timeout after 300 seconds while scanning file.*modules\/library\/sample-data\/src\/main\/resources\/org\/geotools\/test-data\/xml\/fme\/roads\/roads\.xml.*
@@ -21,13 +31,3 @@ resolutions:
   - message: .*Timeout after 300 seconds while scanning file.*
     reason: "SCANNER_ISSUE"
     comment: "The issue is related to the scanner."
-curations:
-  license_findings:
-    - path: "xyz-models/src/main/java/com/here/xyz/models/hub/Space.java"
-      reason: "DATA_OF"
-      comment: "The file contains all possible license identifiers for the content of a space."
-      concluded_license: "Apache-2.0"
-    - path: "xyz-hub-service/src/main/resources/openapi/*"
-      reason: "DATA_OF"
-      comment: "The files found in this folder are part of the openapi specification and could have license keywords, therefore they should be ignored by the OSS scanner."
-      concluded_license: "Apache-2.0"
