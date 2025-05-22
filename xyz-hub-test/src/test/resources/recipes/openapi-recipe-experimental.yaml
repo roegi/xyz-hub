@@ -1,0 +1,8 @@
+---
+name: Data Hub API - Experimental
+exclude:
+  - components.schemas.Space.properties.tags
+replace:
+  - type: value
+    path: info.version
+    replace: ${VERSION}

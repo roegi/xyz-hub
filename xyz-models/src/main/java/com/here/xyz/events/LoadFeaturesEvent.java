@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2013 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,17 +26,17 @@ import com.fasterxml.jackson.annotation.JsonTypeName;
 import java.util.Map;
 
 /**
- * Ask the xyz storage connector to return the current HEAD state of the objects with the given identifiers. Additionally the query may ask
- * for a specific state of the feature, if the state hash is provided as value in the idsMap property. In that case and when the storage
+ * Ask the xyz storage connector to return the current HEAD state of the objects with the given identifiers. Additionally, the query may ask
+ * for a specific state of the feature, if the version is provided as value in the idsMap property. In that case and when the storage
  * provider does have an object history, it should return the feature in the HEAD and in the requested state. If both, the HEAD state and
  * the requested state, are the same, then only this state should be returned.
  *
  * <b>Note/<b>: A specific state is requested when a merge operation may be needed. This merging of concurrent changes is automatically
- * done by the API gateway, if the xyz connector does support returning objects in history state.
+ * done by the API gateway, if the xyz connector does support returning objects in historical state.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeName(value = "LoadFeaturesEvent")
-public final class LoadFeaturesEvent extends Event<LoadFeaturesEvent> {
+public final class LoadFeaturesEvent extends ContextAwareEvent<LoadFeaturesEvent> {
 
   public LoadFeaturesEvent() {
     setPreferPrimaryDataSource(true);
@@ -59,7 +59,7 @@ public final class LoadFeaturesEvent extends Event<LoadFeaturesEvent> {
    */
   @SuppressWarnings("unused")
   public Map<String, String> getIdsMap() {
-    return this.idsMap;
+    return idsMap;
   }
 
   public void setIdsMap(Map<String, String> idsMap) {

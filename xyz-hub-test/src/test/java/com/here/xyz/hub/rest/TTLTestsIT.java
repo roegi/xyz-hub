@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@
 package com.here.xyz.hub.rest;
 
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
+import static io.restassured.RestAssured.given;
 import static junit.framework.TestCase.assertEquals;
 import static junit.framework.TestCase.assertNotSame;
 import static org.hamcrest.CoreMatchers.equalTo;
@@ -63,6 +63,10 @@ public class TTLTestsIT extends TestWithSpaceCleanup {
         .path("id");
   }
 
+  /**
+   * This test will fail if Redis is not running.
+   * Please start a Redis instance or skip this test.
+   */
   @Test
   public void testCacheWithGeoJson() {
     createRandomFeatureSpace();
@@ -75,6 +79,12 @@ public class TTLTestsIT extends TestWithSpaceCleanup {
         .then()
         .extract().body().path("features[0].id");
 
+    try {
+      //Wait 1s to give the asynchronous cache-write some time.
+      Thread.sleep(1_000);
+    }
+    catch (InterruptedException e) {}
+
     String id_cached = given()
         .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
         .contentType(APPLICATION_JSON)
@@ -86,6 +96,10 @@ public class TTLTestsIT extends TestWithSpaceCleanup {
     assertEquals(id, id_cached);
   }
 
+  /**
+   * This test will fail if Redis is not running.
+   * Please start a Redis instance or skip this test.
+   */
   @Test
   public void testCacheWithMvt() {
     createRandomFeatureSpace();
@@ -96,6 +110,12 @@ public class TTLTestsIT extends TestWithSpaceCleanup {
         .when()
         .get("/spaces/" + RANDOM_FEATURE_SPACE + "/tile/web/0_0_0.mvt")
         .body().asByteArray();
+
+    try {
+      //Wait 1s to give the asynchronous cache-write some time.
+      Thread.sleep(1_000);
+    }
+    catch (InterruptedException e) {}
 
     byte[] body_cached = given()
         .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))

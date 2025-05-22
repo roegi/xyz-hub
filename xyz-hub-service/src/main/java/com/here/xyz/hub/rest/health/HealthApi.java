@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 
 package com.here.xyz.hub.rest.health;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 
 import com.here.xyz.hub.Service;
@@ -27,42 +27,64 @@ import com.here.xyz.hub.rest.Api;
 import com.here.xyz.hub.rest.admin.Node;
 import com.here.xyz.hub.util.health.Config;
 import com.here.xyz.hub.util.health.MainHealthCheck;
+import com.here.xyz.hub.util.health.checks.ClusterHealthCheck;
+import com.here.xyz.hub.util.health.checks.DynamoDBHealthCheck;
 import com.here.xyz.hub.util.health.checks.ExecutableCheck;
 import com.here.xyz.hub.util.health.checks.JDBCHealthCheck;
+import com.here.xyz.hub.util.health.checks.MemoryHealthCheck;
 import com.here.xyz.hub.util.health.checks.RedisHealthCheck;
-import com.here.xyz.hub.util.health.checks.RemoteFunctionHealthChecks;
+import com.here.xyz.hub.util.health.checks.RemoteFunctionHealthAggregator;
 import com.here.xyz.hub.util.health.schema.Reporter;
 import com.here.xyz.hub.util.health.schema.Response;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.util.ARN;
+import com.here.xyz.util.service.Core;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpMethod;
+import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import java.net.URI;
 import java.net.URISyntaxException;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 public class HealthApi extends Api {
 
+  private static final Logger logger = LogManager.getLogger();
+
   public static final String MAIN_HEALTCHECK_ENDPOINT = "/hub/";
   private static final URI NODE_HEALTHCHECK_ENDPOINT = getNodeHealthCheckEndpoint();
+  public static final RemoteFunctionHealthAggregator rfcHcAggregator = new RemoteFunctionHealthAggregator();
   private static MainHealthCheck healthCheck = new MainHealthCheck(true)
       .withReporter(
           new Reporter()
-              .withVersion(Service.BUILD_VERSION)
+              .withVersion(Service.buildVersion())
               .withName("HERE XYZ Hub")
-              .withBuildDate(Service.BUILD_TIME)
-              .withUpSince(Service.START_TIME)
+              .withBuildDate(Core.buildTime())
+              .withUpSince(Core.START_TIME)
               .withEndpoint(getPublicServiceEndpoint())
       )
-      .add(
+      .add(new RedisHealthCheck(Service.configuration.getRedisUri()))
+      .add(new MemoryHealthCheck())
+      .add(new ClusterHealthCheck());
+
+  static {
+    if (Service.configuration.ENABLE_CONNECTOR_HEALTH_CHECKS)
+      healthCheck.add(rfcHcAggregator);
+
+    String testDynamoTableArn = com.here.xyz.hub.Config.instance.SPACES_DYNAMODB_TABLE_ARN;
+    if (testDynamoTableArn == null) {
+      healthCheck.add(
           (ExecutableCheck) new JDBCHealthCheck(getStorageDbUri(), Service.configuration.STORAGE_DB_USER,
               Service.configuration.STORAGE_DB_PASSWORD)
+              .withName("Configuration DB Postgres")
               .withEssential(true)
-      )
-      .add(new RedisHealthCheck(Service.configuration.XYZ_HUB_REDIS_HOST, Service.configuration.XYZ_HUB_REDIS_PORT))
-      .add(new RemoteFunctionHealthChecks());
-  //To be continued ...
+      );
+    }
+    else
+      healthCheck.add((ExecutableCheck) new DynamoDBHealthCheck(new ARN(testDynamoTableArn)).withEssential(true));
+  }
 
   public HealthApi(Vertx vertx, Router router) {
     //The main health check endpoint
@@ -77,45 +99,50 @@ public class HealthApi extends Api {
     try {
       return new URI(Service.configuration.STORAGE_DB_URL);
     } catch (URISyntaxException e) {
-      Logging.getLogger().error("Wrong format of STORAGE_DB_URL: " + Service.configuration.STORAGE_DB_URL, e);
+      logger.error("Wrong format of STORAGE_DB_URL: " + Service.configuration.STORAGE_DB_URL, e);
       return null;
     }
   }
 
   private static URI getPublicServiceEndpoint() {
-    try {
-      return new URI(Service.configuration.XYZ_HUB_PUBLIC_PROTOCOL, null,
-          Service.configuration.XYZ_HUB_PUBLIC_HOST, Service.configuration.XYZ_HUB_PUBLIC_PORT,
-          MAIN_HEALTCHECK_ENDPOINT, null, null);
-    } catch (URISyntaxException e) {
-      Logging.getLogger().error("Wrong format of public service endpoint URI: " + Service.configuration.XYZ_HUB_PUBLIC_HOST, e);
-      return null;
-    }
+    return URI.create(Service.configuration.XYZ_HUB_PUBLIC_ENDPOINT + Service.configuration.XYZ_HUB_PUBLIC_HEALTH_ENDPOINT);
   }
 
   private static URI getNodeHealthCheckEndpoint() {
     try {
       return new URI("http://" + Service.getHostname() + ":" + Service.configuration.HTTP_PORT + MAIN_HEALTCHECK_ENDPOINT);
     } catch (URISyntaxException e) {
-      Logging.getLogger().error("Wrong format of internal node hostname URI: " + Service.getHostname(), e);
+      logger.error("Wrong format of internal node hostname URI: " + Service.getHostname(), e);
       return null;
     }
   }
 
-  private static void onHealthStatus(final RoutingContext context) {
-    Response r = healthCheck.getResponse();
-    r.setEndpoint(NODE_HEALTHCHECK_ENDPOINT);
-    r.setNode(Node.OWN_INSTANCE.id);
+  public static void onHealthStatus(final RoutingContext context) {
+    try {
+      Response r = healthCheck.getResponse();
+      r.setEndpoint(NODE_HEALTHCHECK_ENDPOINT);
+      r.setNode(Node.OWN_INSTANCE.id);
 
-    String secretHeaderValue = context.request().getHeader(Config.getHealthCheckHeaderName());
+      String secretHeaderValue = context.request().getHeader(Config.getHealthCheckHeaderName());
 
-    //Always respond with 200 for public HC requests for now
-    int statusCode = r.isPublicRequest(secretHeaderValue) ?
-        OK.code() : r.getStatus().getSuggestedHTTPStatusCode();
-    String responseString = r.toResponseString(secretHeaderValue);
+      //Always respond with 200 for public HC requests for now
+      int statusCode = r.isPublicRequest(secretHeaderValue) ?
+          OK.code() : r.getStatus().getSuggestedHTTPStatusCode();
+      String responseString = r.toResponseString(secretHeaderValue);
 
-    context.response().setStatusCode(statusCode)
-        .putHeader(HttpHeaders.CONTENT_TYPE, APPLICATION_JSON)
-        .end(responseString);
+      context.response().setStatusCode(statusCode)
+          .putHeader(HttpHeaders.CONTENT_TYPE, APPLICATION_JSON)
+          .end(responseString);
+    }
+    catch (Exception e) {
+      logger.error(getMarker(context), "Error while doing the health-check: ", e);
+      context.response().setStatusCode(OK.code())
+          .putHeader(HttpHeaders.CONTENT_TYPE, APPLICATION_JSON)
+          .end(new JsonObject().put("status", new JsonObject().put("result", "WARNING")).encode());
+    }
+  }
+
+  public static int getHealthStatusCode() {
+    return healthCheck.getResponse().getStatus().getSuggestedHTTPStatusCode();
   }
 }

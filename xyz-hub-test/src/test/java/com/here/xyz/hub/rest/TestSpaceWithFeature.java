@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,158 +19,315 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_GEO_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
-import static io.netty.handler.codec.http.HttpResponseStatus.OK;
-import static org.hamcrest.Matchers.equalTo;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
+import static com.here.xyz.hub.auth.TestAuthenticator.AuthProfile.ACCESS_ALL;
 import com.here.xyz.models.geojson.coordinates.PointCoordinates;
 import com.here.xyz.models.geojson.implementation.Feature;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
 import com.here.xyz.models.geojson.implementation.Point;
 import com.here.xyz.models.geojson.implementation.Properties;
-import com.jayway.restassured.response.ValidatableResponse;
-import java.io.IOException;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_VND_HERE_FEATURE_MODIFICATION_LIST;
+import static io.netty.handler.codec.http.HttpResponseStatus.NO_CONTENT;
+import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.restassured.RestAssured.given;
+import io.restassured.response.ValidatableResponse;
+import io.vertx.core.json.JsonObject;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.commons.lang3.RandomStringUtils;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.isIn;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
 
 public class TestSpaceWithFeature extends TestWithSpaceCleanup {
+  protected static String embeddedStorageId = "psql";
+  protected static String httpStorageId = "psql-http";
+
+  protected static String usedStorageId = embeddedStorageId;
 
   protected static void remove() {
     TestWithSpaceCleanup.removeSpace("x-psql-test");
   }
 
-  protected static void createSpace() {
-    final ValidatableResponse response = given().
-        contentType(APPLICATION_JSON).
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
-        body(content("/xyz/hub/createSpace.json")).
-        when().post("/spaces").then();
+  public static ValidatableResponse createSpace(String content) {
+    return given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .body(content)
+        .when()
+        .post(getCreateSpacePath())
+        .then()
+        .statusCode(OK.code());
+  }
 
-    response.statusCode(OK.code()).
-        body("id", equalTo("x-psql-test")).
-        body("title", equalTo("My Demo Space")).
-        body("storage.id", equalTo("psql"));
+  /**
+   * @deprecated Please do not use this method anymore. Use {@link #createSpaceWithRandomId()} instead.
+   * This will allow running tests in parallel.
+   */
+  @Deprecated
+  protected static void createSpace() {
+    String path = "/xyz/hub/createSpace.json";
+    String content = usedStorageId == embeddedStorageId ? content(path) : content(path, usedStorageId);
+    createSpace(content)
+            .body("id", equalTo(getSpaceId()))
+            .body("title", equalTo("My Demo Space"))
+            .body("storage.id", equalTo((usedStorageId)));
+  }
+
+  protected static void setReadOnly(String spaceId) {
+    patchSpace(spaceId, new JsonObject().put("readOnly", true));
+  }
+
+  protected static ValidatableResponse patchSpace(String spaceId, JsonObject spacePatch) {
+    return given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .contentType(APPLICATION_JSON)
+        .body(spacePatch.encode())
+        .when()
+        .patch(getCreateSpacePath(spaceId) + "/" + spaceId)
+        .then()
+        .statusCode(200);
+  }
+
+  /**
+   * Creates a space with a random ID.
+   * @return the random ID
+   */
+  protected static String createSpaceWithRandomId() {
+    return createSpaceWithId(UUID.randomUUID().toString());
+  }
+
+  protected static String createSpaceWithId(String spaceId) {
+    return createSpaceWithCustomStorage(spaceId, "psql", null, 1, false);
+  }
+
+  protected static String createSpaceWithCustomStorage(String spaceId, String storageId, JsonObject storageParams) {
+    return createSpaceWithCustomStorage(spaceId, storageId, storageParams, 1, false);
+  }
+
+  protected static String createSpaceWithCustomStorage(String spaceId, String storageId, JsonObject storageParams, boolean persistExport) {
+    return createSpaceWithCustomStorage(spaceId, storageId, storageParams, 1, persistExport);
+  }
+
+  protected static String createSpaceWithCustomStorage(String spaceId, String storageId, JsonObject storageParams, int versionsToKeep) {
+    return createSpaceWithCustomStorage(spaceId, storageId, storageParams, versionsToKeep, false);
+  }
+
+  protected static String createSpaceWithCustomStorage(String spaceId, String storageId, JsonObject storageParams, int versionsToKeep,
+      boolean persistExport) {
+    JsonObject storage = new JsonObject()
+        .put("id", storageId);
+    if (storageParams != null)
+      storage.put("params", storageParams);
+    JsonObject space = new JsonObject()
+        .put("id", spaceId)
+        .put("title", "Demo Space with storage " + storageId)
+        .put("storage", storage)
+        .put("versionsToKeep", versionsToKeep);
+    if(persistExport)
+      space.put("persistExport", true);
+
+    return given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .contentType(APPLICATION_JSON)
+        .body(space.encode())
+        .when()
+        .post(getCreateSpacePath(spaceId))
+        .then()
+        .statusCode(200)
+        .extract()
+        .body()
+        .path("id");
   }
 
   protected static String createSpace(final AuthProfile authProfile, final String title, final boolean shared) {
-    return given().
-        contentType(APPLICATION_JSON).
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(authProfile)).
-        body("{\"title\": \""+title+"\", \"description\": \"description for "+title+" space\", \"shared\": " +shared+ "}").
-        when().
-        post("/spaces").
-        then().
-        statusCode(OK.code()).
-        extract().
-        body().
-        path("id");
+    return given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(authProfile))
+        .body("{\"title\": \""+title+"\", \"description\": \"description for "+title+" space\", \"shared\": " +shared+ "}")
+        .when()
+        .post("/spaces")
+        .then()
+        .statusCode(OK.code())
+        .extract()
+        .body()
+        .path("id");
   }
 
-  static void addFeatures() {
-    given().
-        contentType(APPLICATION_GEO_JSON).
-        accept(APPLICATION_GEO_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
-        body(content("/xyz/hub/processedData.json")).
-        when().
-        put("/spaces/x-psql-test/features").
-        then().
-        statusCode(OK.code()).
-        body("features.size()", equalTo(252));
+  public void createSpaceWithVersionsToKeep(String spaceId, int versionsToKeep) {
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .body("{\"id\":\""+spaceId+"\",\"title\":\"" + spaceId + "\",\"versionsToKeep\":"+versionsToKeep+"}")
+        .when()
+        .post(getCreateSpacePath())
+        .then()
+        .statusCode(OK.code());
+  }
+
+  protected static void addFeature(String spaceId, Feature f) {
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .body(wrapFeature(f).serialize())
+        .when()
+        .post(getSpacesPath() + "/" + spaceId + "/features");
+  }
+
+  protected static FeatureCollection wrapFeature(Feature f) {
+    return new FeatureCollection().withFeatures(Collections.singletonList(f));
+  }
+
+  protected static void addFeatures() {
+    addFeatures("x-psql-test");
+  }
+
+  protected static void addFeatures(String toSpace) {
+    addFeatures(toSpace,"/xyz/hub/processedData.json",252);
+  }
+
+  protected static void addFeatures(String toSpace, String contentPath, int expectedFeatureCount) {
+    given()
+        .contentType(APPLICATION_GEO_JSON)
+        .accept(APPLICATION_GEO_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body(content(contentPath))
+        .when()
+        .put(getSpacesPath() + "/" + toSpace + "/features")
+        .then()
+        .statusCode(OK.code())
+        .body("features.size()", equalTo(expectedFeatureCount));
   }
 
   static void add10ThousandFeatures() throws InterruptedException {
     final ExecutorService executorService = Executors.newFixedThreadPool(10);
 
-    for (int i=0; i<50; i++) {
+    for (int i = 0; i < 50; i++) {
       final int ii = i;
       executorService.execute(()->{
         FeatureCollection f = new FeatureCollection();
-        for (int j=0; j<200; j++) {
+        for (int j = 0; j < 200; j++) {
           try {
             f.getFeatures().add(new Feature().withProperties(new Properties().with("ticketPrice", ii * j))
                 .withGeometry(new Point().withCoordinates(new PointCoordinates(ii, j % 90))));
-          } catch (JsonProcessingException ignored) {
           }
+          catch (JsonProcessingException ignored) {}
         }
 
-        given().
-            contentType(APPLICATION_GEO_JSON).
-            accept(APPLICATION_GEO_JSON).
-            headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
-            body(f.serialize()).
-            when().
-            post("/spaces/x-psql-test/features").
-            then().
-            statusCode(OK.code());
+        given()
+            .contentType(APPLICATION_GEO_JSON)
+            .accept(APPLICATION_GEO_JSON)
+            .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+            .body(f.serialize())
+            .when()
+            .post(getSpacesPath() + "/x-psql-test/features")
+            .then()
+            .statusCode(OK.code());
       });
     }
 
     executorService.awaitTermination(10, TimeUnit.SECONDS);
   }
 
+  static void add10ThousandFeatures2()  {
+
+
+    for (int i = 0; i < 50; i++) {
+
+        FeatureCollection f = new FeatureCollection();
+        for (int j = 0; j < 200; j++)
+          try {
+            f.getFeatures().add(new Feature().withProperties(new Properties().with("ticketPrice", 200 * i + j))
+                .withGeometry(new Point().withCoordinates(new PointCoordinates(i, j % 90))));
+          }
+          catch (JsonProcessingException ignored){}
+
+        given()
+            .contentType(APPLICATION_GEO_JSON)
+            .accept(APPLICATION_GEO_JSON)
+            .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+            .body(f.serialize())
+            .when()
+            .post(getSpacesPath() + "/x-psql-test/features")
+            .then()
+            .statusCode(OK.code());
+    }
+  }
+
+
+  @SuppressWarnings("SameParameterValue")
   static void publishSpace(String spaceId) {
-    final ValidatableResponse response = given().
-        contentType(APPLICATION_JSON).
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
-        body(content("/xyz/hub/publishSpace.json")).
-        when().patch("/spaces/" + spaceId).then();
-
-    response.statusCode(OK.code()).
-        body("id", equalTo(spaceId)).
-        body("shared", equalTo(true));
+    given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body(content("/xyz/hub/publishSpace.json"))
+        .when()
+        .patch("/spaces/" + spaceId).then()
+        .statusCode(OK.code())
+        .body("id", equalTo(spaceId))
+        .body("shared", equalTo(true));
   }
 
+  @SuppressWarnings("SameParameterValue")
   static void addListener(String spaceId) {
-    final ValidatableResponse response = given().
-        contentType(APPLICATION_JSON).
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_LISTENER)).
-        body(content("/xyz/hub/createSpaceWithListener.json")).
-        when().patch("/spaces/" + spaceId).then();
+    final ValidatableResponse response = given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_LISTENER))
+        .body(content("/xyz/hub/createSpaceWithListener.json"))
+        .when().patch("/spaces/" + spaceId).then();
 
-    response.statusCode(OK.code()).
-        body("id", equalTo(spaceId));
+    response.statusCode(OK.code())
+        .body("id", equalTo(spaceId));
   }
 
+  @SuppressWarnings("SameParameterValue")
   static void addProcessor(String spaceId) {
-    final ValidatableResponse response = given().
-        contentType(APPLICATION_JSON).
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_ACCESS_CONNECTOR_RULE_TAGGER)).
-        body(content("/xyz/hub/createSpaceWithProcessor.json")).
-        when().patch("/spaces/" + spaceId).then();
+    final ValidatableResponse response = given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_ACCESS_CONNECTOR_RULE_TAGGER))
+        .body(content("/xyz/hub/createSpaceWithProcessor.json"))
+        .when().patch("/spaces/" + spaceId).then();
 
-    response.statusCode(OK.code()).
-        body("id", equalTo(spaceId));
+    response.statusCode(OK.code())
+        .body("id", equalTo(spaceId));
   }
 
-  static void countFeatures(int expected) {
+  protected void countFeatures(int expected) {
     given().
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
-        when().
-        get("/spaces/x-psql-test/statistics").
-        then().
-        statusCode(OK.code()).
-        body("count.value", equalTo(expected),
-            "count.estimated", equalTo(false));
+        accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .get(getSpacesPath() + "/x-psql-test/statistics")
+        .then()
+        .statusCode(OK.code())
+        .body("count.value", equalTo(expected),"count.estimated", equalTo(false));
   }
 
-  static FeatureCollection generateRandomFeatures(int featureCount, int propertyCount) {
+  @SuppressWarnings("SameParameterValue")
+  public static FeatureCollection generateRandomFeatures(int featureCount, int propertyCount) {
+    return generateRandomFeatures(featureCount, propertyCount, false);
+  }
+
+  public static FeatureCollection generateRandomFeatures(int featureCount, int propertyCount, boolean generateId) {
     FeatureCollection collection = new FeatureCollection();
     Random random = new Random();
 
@@ -185,11 +342,218 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
                     new Point().withCoordinates(new PointCoordinates(360d * random.nextDouble() - 180d, 180d * random.nextDouble() - 90d)))
                 .withProperties(new Properties());
             pKeys.forEach(p -> f.getProperties().put(p, RandomStringUtils.randomAlphanumeric(8)));
+
+            if (generateId) {
+              f.setId(RandomStringUtils.randomAlphabetic(10));
+            }
+
             return f;
-          }).limit(featureCount).collect(Collectors.toList()));
-    } catch (JsonProcessingException ignored) {
+          }).parallel().limit(featureCount).collect(Collectors.toList()));
     }
+    catch (JsonProcessingException ignored) {}
     return collection;
   }
 
+  protected void validateFeatureProperties(ValidatableResponse resp, String featureId) {
+    JsonObject body = new JsonObject(resp
+        .extract()
+        .body()
+        .as(Map.class));
+
+    JsonObject feature = body
+        .getJsonArray("features")
+        .getJsonObject(0);
+
+    assertEquals(featureId, feature.getString("id"));
+    assertEquals("Feature", feature.getString("type"));
+    assertEquals("Point", feature.getJsonObject("geometry").getString("type"));
+
+    validateXyzNs(feature.getJsonObject("properties").getJsonObject("@ns:com:here:xyz"));
+  }
+
+  protected void validateXyzNs(JsonObject xyzNs) {
+    String[] allowedFieldNames = {"space", "createdAt", "updatedAt", "tags", "author", "version"};
+    assertThat(xyzNs.fieldNames(), everyItem(isIn(allowedFieldNames)));
+  }
+  protected void getFeature(String spaceId, String featureId, Integer statusCode) {
+    getFeature(spaceId, featureId, statusCode, null, null);
+  }
+
+  protected void getFeature(String spaceId, String featureId, Integer statusCode, String path, String value) {
+    validateGetFeatureResponse(statusCode, path, value, getFeature(spaceId, featureId));
+  }
+
+  protected void getFeature(String spaceId, String featureId, long version, int statusCode) {
+    getFeature(spaceId, featureId, version, null, statusCode);
+  }
+
+  protected void getFeature(String spaceId, String featureId, String context, int statusCode) {
+    getFeature(spaceId, featureId, -1, context, statusCode);
+  }
+
+  protected void getFeature(String spaceId, String featureId, long version, String context, int statusCode) {
+    validateGetFeatureResponse(statusCode, null, null, getFeature(spaceId, featureId, version, context));
+  }
+
+  protected ValidatableResponse getAllFeatureVersions(String spaceId, String featureId, String context) {
+    return getFeature(spaceId, featureId, "*", context);
+  }
+
+  private static void validateGetFeatureResponse(Integer statusCode, String path, String value, ValidatableResponse response) {
+    if (statusCode != null)
+      response.statusCode(statusCode);
+
+    if (path != null && value != null)
+      response.body(path, equalTo(value));
+  }
+
+  protected ValidatableResponse getFeature(String spaceId, String featureId) {
+    return getFeature(spaceId, featureId, -1);
+  }
+
+  private String queryStringFromMap(Map<String, Object> queryParams) {
+    List<String> queryStringParts = queryParams.entrySet()
+        .stream()
+        .filter(entry -> entry.getValue() != null)
+        .map(entry -> entry.getKey() + "=" + entry.getValue())
+        .collect(Collectors.toList());
+    if (queryStringParts.isEmpty())
+      return "";
+    return "?" + String.join("&", queryStringParts);
+  }
+
+  protected ValidatableResponse getFeature(String spaceId, String featureId, long version) {
+    return getFeature(spaceId, featureId, version, null);
+  }
+
+  protected ValidatableResponse getFeature(String spaceId, String featureId, String context) {
+    return getFeature(spaceId, featureId, null, context);
+  }
+
+  protected ValidatableResponse getFeature(String spaceId, String featureId, long version, String context) {
+    return getFeature(spaceId, featureId, version != -1 ? "" + version : null, context);
+  }
+
+  private ValidatableResponse getFeature(String spaceId, String featureId, String versionRef, String context) {
+    Map<String, Object> queryParams = new HashMap<>() {{
+      put("version", versionRef);
+      put("context", context);
+    }};
+    return given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .get("/spaces/" + spaceId + "/features/" + featureId + queryStringFromMap(queryParams))
+        .then();
+  }
+
+  protected static void deleteFeature(String spaceId, String featureId) {
+    deleteFeature(spaceId, featureId, null);
+  }
+
+  protected static void deleteFeature(String spaceId, String featureId, String context) {
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .delete("/spaces/" + spaceId + "/features/" + featureId + (context != null ? "?context=" + context : ""))
+        .then()
+        .statusCode(NO_CONTENT.code());
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile) {
+    postFeature(spaceId, feature, authProfile, false);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection) {
+    given()
+        .contentType(APPLICATION_GEO_JSON)
+        .headers(getAuthHeaders(authProfile))
+        .body(feature.serialize())
+        .when()
+        .post("/spaces/" + spaceId + "/features?conflictDetection=" + versionConflictDetection)
+        .then()
+        .statusCode(OK.code())
+        .body("features[0].id", equalTo(feature.getId()));
+  }
+
+  public static Feature newFeature() {
+    return new Feature().withId("f1")
+        .withGeometry(new Point().withCoordinates(new PointCoordinates(0,0)))
+        .withProperties(new Properties().with("key1", "value1"));
+  }
+
+  public static void postFeatures(String spaceId, FeatureCollection features, AuthProfile authProfile) {
+    given()
+        .contentType(APPLICATION_GEO_JSON)
+        .headers(getAuthHeaders(authProfile))
+        .body(features.serialize())
+        .when()
+        .post(getSpacesPath() + "/"+ spaceId +"/features");
+  }
+
+  protected static void makeComposite(String spaceId, String newExtendingId) {
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"extends\":{\"spaceId\":\"" + newExtendingId + "\"}}")
+        .when()
+        .patch("/spaces/" + spaceId)
+        .then()
+        .statusCode(OK.code());
+  }
+
+  protected static void createSpaceWithExtension(String extendingSpaceId, int versionsToKeep) {
+    String extensionId = extendingSpaceId + "-ext",
+           reqBody = String.format("{\"id\":\"%s\",\"title\":\"x-psql-test-extension\",\"extends\":{\"spaceId\":\"%s\"}%s}"
+                                   ,extensionId,extendingSpaceId, (versionsToKeep <= 0 ? "" : ",\"versionsToKeep\":" + versionsToKeep) );
+
+    given()
+            .contentType(APPLICATION_JSON)
+            .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+            .body(reqBody)
+            .when()
+            .post("/spaces")
+            .then()
+            .statusCode(OK.code())
+            .body("id", equalTo(extensionId))
+            .body("extends.spaceId", equalTo(extendingSpaceId));
+  }
+
+  protected static void createSpaceWithExtension(String extendingSpaceId) {
+    createSpaceWithExtension(extendingSpaceId,0);
+  }
+
+
+  private String constructFeatureModificationList(Feature feature, String ifNotExists, String ifExists, String conflictResolution) {
+    return "{"
+        + "    \"type\": \"FeatureModificationList\","
+        + "    \"modifications\": ["
+        + "        {"
+        + "            \"type\": \"FeatureModification\","
+        + "            \"onFeatureNotExists\": \"" + ifNotExists + "\","
+        + "            \"onFeatureExists\": \"" + ifExists + "\","
+        + (conflictResolution != null ? "            \"onMergeConflict\": \"" + conflictResolution + "\"," : "")
+        + "            \"featureData\": " + new FeatureCollection().withFeatures(List.of(feature)).serialize()
+        + "        }"
+        + "    ]"
+        + "}";
+  }
+
+  protected ValidatableResponse writeFeature(Feature feature, String ifNotExists, String ifExists, String conflictResolution) {
+    return writeFeature(feature, ifNotExists, ifExists, conflictResolution, false);
+  }
+
+  protected ValidatableResponse writeFeature(Feature feature, String ifNotExists, String ifExists, boolean versionConflictDetection) {
+    return writeFeature(feature, ifNotExists, ifExists, null, versionConflictDetection);
+  }
+
+  protected ValidatableResponse writeFeature(Feature feature, String ifNotExists, String ifExists, String conflictResolution,
+      boolean versionConflictDetection) {
+    return given()
+        .contentType(APPLICATION_VND_HERE_FEATURE_MODIFICATION_LIST)
+        .headers(getAuthHeaders(ACCESS_ALL))
+        .body(constructFeatureModificationList(feature, ifNotExists, ifExists, conflictResolution))
+        .when()
+        .post(getSpacesPath() + "/" + getSpaceId() + "/features?conflictDetection=" + versionConflictDetection)
+        .then();
+  }
 }

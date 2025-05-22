@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,191 +21,323 @@ package com.here.xyz.hub.config;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.here.xyz.hub.Service;
+import com.here.xyz.hub.config.dynamo.DynamoConnectorConfigClient;
+import com.here.xyz.hub.config.jdbc.JDBCConnectorConfigClient;
 import com.here.xyz.hub.connectors.models.Connector;
 import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig.Embedded;
-import com.here.xyz.hub.rest.admin.AdminMessage;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.hub.rest.admin.messages.RelayedMessage;
+import com.here.xyz.psql.DatabaseHandler;
+import com.here.xyz.util.db.ECPSTool;
+import com.here.xyz.util.service.Initializable;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import io.vertx.core.json.Json;
+import io.vertx.core.Promise;
+import io.vertx.core.json.JsonObject;
+import io.vertx.core.json.jackson.JacksonCodec;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Marker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
 
-public abstract class ConnectorConfigClient implements Initializable, Logging {
+public abstract class ConnectorConfigClient implements Initializable {
+
+  private static final Logger logger = LogManager.getLogger();
+
+  private static final String ANONYMOUS_OWNER = "ANONYMOUS";
 
   public static final ExpiringMap<String, Connector> cache = ExpiringMap.builder()
       .expirationPolicy(ExpirationPolicy.CREATED)
-      .expiration(3, TimeUnit.MINUTES)
+      .expiration(1, TimeUnit.MINUTES)
       .build();
 
   public static ConnectorConfigClient getInstance() {
-    // TODO remove the below comments when it's time to move to dynamo
-//    if (Service.configuration.CONNECTORS_DYNAMODB_TABLE_ARN != null) {
-//      if (Service.configuration.STORAGE_DB_URL != null) {
-//        //We're in the migration phase
-//        return MigratingSpaceConnectorConfigClient.getInstance();
-//      }
-//      else
-//        return new DynamoConnectorConfigClient(Service.configuration.CONNECTORS_DYNAMODB_TABLE_ARN);
-//    }
-//    else
-    return JDBCConnectorConfigClient.getInstance();
+    if (Service.configuration.CONNECTORS_DYNAMODB_TABLE_ARN != null) {
+      return new DynamoConnectorConfigClient(Service.configuration.CONNECTORS_DYNAMODB_TABLE_ARN);
+    } else {
+      return JDBCConnectorConfigClient.getInstance();
+    }
   }
 
+  /**
+   * Returns a future which may or may not contain a Connector
+   * @param marker the marker for log
+   * @param connectorId the connector id
+   * @return the future containing the connector or an empty future when the connector is not found.
+   */
+  public Future<Connector> get(Marker marker, String connectorId) {
+    if (StringUtils.isEmpty(connectorId))
+      return Future.succeededFuture();
 
-  public void get(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler) {
+    Promise<Connector> p = Promise.promise();
+    get(marker, connectorId, handler -> {
+      if (handler.succeeded()) {
+        p.complete(handler.result());
+      } else {
+        p.fail(handler.cause());
+      }
+    });
+    return p.future();
+  }
+
+  public void get(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler) { //TODO: Use Future as return type
     final Connector connectorFromCache = cache.get(connectorId);
 
     if (connectorFromCache != null) {
-      logger().info(marker, "storageId: {} - The connector was loaded from cache", connectorId);
+      logger.info(marker, "storageId: {} - The connector was loaded from cache", connectorId);
       handler.handle(Future.succeededFuture(connectorFromCache));
       return;
     }
 
-    getConnector(marker, connectorId, ar -> {
-      if (ar.succeeded()) {
-        final Connector connector = ar.result();
-        cache.put(connectorId, connector);
-        handler.handle(Future.succeededFuture(connector));
-      } else {
-        logger().info(marker, "storageId[{}]: Connector not found", connectorId);
-        handler.handle(Future.failedFuture(ar.cause()));
-      }
-    });
+    getConnector(marker, connectorId)
+        .onSuccess(connector -> {
+          if (connector.owner != null && connector.owner.equals(ANONYMOUS_OWNER))
+            connector.owner = null;
+          cache.put(connectorId, connector);
+          handler.handle(Future.succeededFuture(connector));
+        })
+        .onFailure(t -> {
+          logger.info(marker, "storageId[{}]: Connector not found", connectorId);
+          handler.handle(Future.failedFuture(t));
+        });
+  }
+
+  public void getByOwner(Marker marker, String ownerId, Handler<AsyncResult<List<Connector>>> handler) { //TODO: Use Future as return type
+    getConnectorsByOwner(marker, ownerId)
+        .onSuccess(connectors -> {
+          connectors.forEach(c -> {
+            if (c.owner != null && c.owner.equals(ANONYMOUS_OWNER))
+              c.owner = null;
+            cache.put(c.id, c);
+          });
+          handler.handle(Future.succeededFuture(connectors));
+        })
+        .onFailure(t -> {
+          logger.info(marker, "storageId[{}]: Connectors for owner not found", ownerId);
+          handler.handle(Future.failedFuture(t));
+        });
   }
 
   public void store(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler) {
     store(marker, connector, handler, true);
   }
 
-  private void store(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler, boolean withInvalidation) {
+  private void store(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler, boolean withInvalidation) { //TODO: Use Future as return type
     if (connector.id == null) {
       connector.id = RandomStringUtils.randomAlphanumeric(10);
+    }
+    if (connector.owner == null) {
+      connector.owner = ANONYMOUS_OWNER;
     }
 
     storeConnector(marker, connector, ar -> {
       if (ar.succeeded()) {
         final Connector connectorResult = ar.result();
-        if (withInvalidation)
+        if (connectorResult.owner != null && connectorResult.owner.equals(ANONYMOUS_OWNER))
+          connectorResult.owner = null;
+        if (withInvalidation) {
           invalidateCache(connector.id);
+        }
         handler.handle(Future.succeededFuture(connectorResult));
       } else {
-        logger().info(marker, "storageId[{}]: Failed to store connector configuration, reason: ", connector.id, ar.cause());
+        logger.error(marker, "storageId[{}]: Failed to store connector configuration, reason: ", connector.id, ar.cause());
         handler.handle(Future.failedFuture(ar.cause()));
       }
     });
   }
 
-  public void delete(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler) {
+  public void delete(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler) { //TODO: Use Future as return type
     deleteConnector(marker, connectorId, ar -> {
       if (ar.succeeded()) {
         final Connector connectorResult = ar.result();
+        if (connectorResult.owner != null && connectorResult.owner.equals(ANONYMOUS_OWNER))
+          connectorResult.owner = null;
         invalidateCache(connectorId);
         handler.handle(Future.succeededFuture(connectorResult));
       } else {
-        logger().info(marker, "storageId[{}]: Failed to store connector configuration, reason: ", connectorId, ar.cause());
+        logger.error(marker, "storageId[{}]: Failed to delete connector configuration, reason: ", connectorId, ar.cause());
         handler.handle(Future.failedFuture(ar.cause()));
       }
     });
   }
 
-  public void getAll(Marker marker, Handler<AsyncResult<List<Connector>>> handler) {
+  public void getAll(Marker marker, Handler<AsyncResult<List<Connector>>> handler) { //TODO: Use Future as return type
     getAllConnectors(marker, ar -> {
       if (ar.succeeded()) {
         final List<Connector> connectors = ar.result();
-        connectors.forEach(c -> cache.put(c.id, c));
+        connectors.forEach(c -> {
+          if (c.owner != null && c.owner.equals(ANONYMOUS_OWNER))
+            c.owner = null;
+          cache.put(c.id, c);
+        });
         handler.handle(Future.succeededFuture(connectors));
       } else {
-        logger().info(marker, "Failed to load connectors, reason: ", ar.cause());
+        logger.error(marker, "Failed to load connectors, reason: ", ar.cause());
         handler.handle(Future.failedFuture(ar.cause()));
       }
     });
   }
 
-  public void insertLocalConnectors() {
-    InputStream input = ConnectorConfigClient.class.getResourceAsStream("/connectors.json");
+  public CompletableFuture<Void> insertLocalConnectors() {
+    if (!Service.configuration.INSERT_LOCAL_CONNECTORS)
+      return CompletableFuture.completedFuture(null);
+
+    final InputStream input = ConnectorConfigClient.class.getResourceAsStream("/connectors.json");
+    if (input == null)
+      return CompletableFuture.completedFuture(null);
+
     try (BufferedReader buffer = new BufferedReader(new InputStreamReader(input))) {
-      String connectorsFile = buffer.lines().collect(Collectors.joining("\n"));
-      List<Connector> connectors = Json.decodeValue(connectorsFile, new TypeReference<List<Connector>>() {
-      });
+      final String connectorsFile = buffer.lines().collect(Collectors.joining("\n"));
+      final List<Connector> connectors = JacksonCodec.decodeValue(connectorsFile, new TypeReference<>() {});
+      final List<CompletableFuture<Void>> futures = new ArrayList<>();
+
       connectors.forEach(c -> {
-        replaceEnvVars(c);
+        replaceConnectorVars(c);
+
+        final CompletableFuture<Void> future = new CompletableFuture<>();
+        futures.add(future);
 
         storeConnectorIfNotExists(null, c, r -> {
           if (r.failed()) {
-            logger().info(r.toString());
+            future.completeExceptionally(r.cause());
+          } else {
+            future.complete(null);
           }
         });
       });
+
+      return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
     } catch (IOException e) {
-      logger().info("Unable to insert the local connectors.");
+      logger.error("Unable to insert the local connectors.");
+      return CompletableFuture.failedFuture(e);
     }
   }
 
-  private void replaceEnvVars(final Connector connector) {
-    if (connector == null) return;
+  private void replaceConnectorVars(final Connector connector) {
+    if (connector == null)
+      return;
 
-    if (connector.remoteFunction instanceof Embedded) {
-      final Map<String, String> map = new HashMap<String, String>() {{
-        put("PSQL_HOST", Service.configuration.PSQL_HOST);
-      }};
+    replaceVarsInMap(connector.params, ecpsJson -> {
+      String ecpsPhrase = connector.getRemoteFunction() instanceof Embedded embeddedRf
+          ? embeddedRf.env.get(DatabaseHandler.ECPS_PHRASE)
+          : "local";
+      if (ecpsPhrase == null) return null;
+      //Replace vars in the ECPS JSON
+      JsonObject ecpsValues = new JsonObject(ecpsJson);
+      Map<String, String> varValues = getPsqlVars();
+      replaceVarsInMap(ecpsValues.getMap(), varName -> varValues.get(varName), "${", "}");
+      ecpsJson = ecpsValues.toString();
+      //Encrypt the ECPS JSON
+      try {
+        return ECPSTool.encrypt(ecpsPhrase, ecpsJson);
+      }
+      catch (GeneralSecurityException e) {
+        return null;
+      }
+    }, "$encrypt(", ")");
 
-      final Embedded embedded = (Embedded) connector.remoteFunction;
-      final Map<String, String> replacement = new HashMap<>();
+    if (connector.getRemoteFunction() instanceof Embedded) {
+      Map<String, String> varValues = getPsqlVars();
+      replaceVarsInMap(((Embedded) connector.getRemoteFunction()).env, varName -> varValues.get(varName), "${", "}");
+    }
+    else if(connector.getRemoteFunction().id.equalsIgnoreCase("psql-http")){
+     try {
+       //Replace HOST in http-connector config
+        ((Connector.RemoteFunctionConfig.Http)connector.getRemoteFunction()).url =
+                new URL(Service.configuration.HTTP_CONNECTOR_ENDPOINT+"/event");
+      } catch (MalformedURLException e) {}
+    }
+  }
 
-      embedded.env.entrySet().stream()
-        .filter(e->StringUtils.startsWith(e.getValue(), "${") && StringUtils.endsWith(e.getValue(), "}"))
-        .forEach(e-> {
-          final String placeholder = StringUtils.substringBetween(e.getValue(), "${", "}");
-          if (map.containsKey(placeholder)) {
-            replacement.put(e.getKey(), map.get(placeholder));
-          }
+  private static Map<String, String> getPsqlVars() {
+    Map<String, String> psqlVars = new HashMap<>();
+
+    if (Service.configuration.STORAGE_DB_URL != null) {
+      URI uri = URI.create(Service.configuration.STORAGE_DB_URL.substring(5));
+      psqlVars.put("PSQL_HOST", uri.getHost());
+      psqlVars.put("PSQL_PORT", String.valueOf(uri.getPort() == -1 ? 5432 : uri.getPort()));
+      psqlVars.put("PSQL_USER", Service.configuration.STORAGE_DB_USER);
+      psqlVars.put("PSQL_PASSWORD", Service.configuration.STORAGE_DB_PASSWORD);
+      String[] pathComponent = uri.getPath() == null ? null : uri.getPath().split("/");
+      if (pathComponent != null && pathComponent.length > 1)
+        psqlVars.put("PSQL_DB", pathComponent[1]);
+    }
+
+    return psqlVars;
+  }
+
+  private <V> void replaceVarsInMap(Map<String, V> map, Function<String, V> resolve, String prefix, String suffix) {
+    if (map == null || map.isEmpty()) return;
+    final Map<String, V> replacement = new HashMap<>();
+
+    map.entrySet().stream()
+        .filter(e -> e.getValue() instanceof String && ((String) e.getValue()).startsWith(prefix) && ((String) e.getValue()).endsWith(suffix))
+        .forEach(e -> {
+          final String placeholder = StringUtils.substringBetween((String) e.getValue(), prefix, suffix);
+          replacement.put(e.getKey(), resolve.apply(placeholder));
         });
 
-      embedded.env.putAll(replacement);
-    }
+    map.putAll(replacement);
   }
 
-  private void storeConnectorIfNotExists(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler) {
+  private void storeConnectorIfNotExists(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler) { //TODO: Use Future as return type
     get(marker, connector.id, r -> {
       if (r.failed()) {
-        logger().info("Connector with ID {} does not exist. Creating it ...", connector.id);
+        logger.info("Connector with ID {} does not exist. Creating it ...", connector.id);
         store(marker, connector, handler, false);
-      } else {
-        handler.handle(Future.failedFuture("Connector with ID " + connector.id + " already exists."));
+      }
+      else {
+        //Do nothing, just succeed
+        logger.info("Connector with ID " + connector.id + " already exists. Not creating it.");
+        handler.handle(Future.succeededFuture(r.result()));
       }
     });
   }
 
+  protected abstract Future<Connector> getConnector(Marker marker, String connectorId);
 
-  protected abstract void getConnector(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler);
+  protected abstract Future<List<Connector>> getConnectorsByOwner(Marker marker, String ownerId);
 
-  protected abstract void storeConnector(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler);
+  protected abstract void storeConnector(Marker marker, Connector connector, Handler<AsyncResult<Connector>> handler); //TODO: Use Future as return type
 
-  protected abstract void deleteConnector(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler);
+  protected abstract void deleteConnector(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler); //TODO: Use Future as return type
 
-  protected abstract void getAllConnectors(Marker marker, Handler<AsyncResult<List<Connector>>> handler);
+  protected abstract void getAllConnectors(Marker marker, Handler<AsyncResult<List<Connector>>> handler); //TODO: Use Future as return type
 
   public void invalidateCache(String id) {
     new InvalidateConnectorCacheMessage().withId(id).withBroadcastIncludeLocalNode(true).broadcast();
   }
 
-  public static class InvalidateConnectorCacheMessage extends AdminMessage {
+  public static class InvalidateConnectorCacheMessage extends RelayedMessage {
 
     String id;
+
+    public String getId() {
+      return id;
+    }
+
+    public void setId(String id) {
+      this.id = id;
+    }
 
     public InvalidateConnectorCacheMessage withId(String id) {
       this.id = id;
@@ -213,7 +345,7 @@ public abstract class ConnectorConfigClient implements Initializable, Logging {
     }
 
     @Override
-    protected void handle() {
+    protected void handleAtDestination() {
       cache.remove(id);
     }
   }

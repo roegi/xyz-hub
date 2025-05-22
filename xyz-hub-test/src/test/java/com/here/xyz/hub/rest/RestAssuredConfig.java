@@ -21,10 +21,11 @@ package com.here.xyz.hub.rest;
 
 public class RestAssuredConfig {
   public String baseURI;
-  public int port;
+  public int hubPort;
+  public String fullHubUri;
+  public String fullHttpConnectorUri;
 
   private RestAssuredConfig() {
-    System.out.println("Test config created");
   }
 
   private static RestAssuredConfig config = null;
@@ -38,8 +39,18 @@ public class RestAssuredConfig {
 
   private static RestAssuredConfig localConfig() {
     RestAssuredConfig config = new RestAssuredConfig();
-    config.baseURI = "http://localhost/hub";
-    config.port = 8080;
+    String envPort = System.getenv("HTTP_PORT");
+    String host = System.getenv().containsKey("HTTP_HOST") ? System.getenv("HTTP_HOST") : "localhost";
+    String service = System.getenv().containsKey("HTTP_SERVICE") ? System.getenv("HTTP_SERVICE") : "hub";
+    config.baseURI = "http://"+host+"/" + service;
+    config.hubPort = 8080;
+    config.fullHubUri = "http://"+host+":"+config.hubPort +"/" + service;
+    config.fullHttpConnectorUri = "http://"+host+":9090/psql";
+
+    try {
+      config.hubPort = Integer.parseInt(envPort);
+    }
+    catch (NumberFormatException ignore) {}
     return config;
   }
 }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (C) 2017-2019 HERE Europe B.V.
+  ~ Copyright (C) 2017-2023 HERE Europe B.V.
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@
   <parent>
     <groupId>com.here.xyz</groupId>
     <artifactId>xyz-hub</artifactId>
-    <relativePath>../</relativePath>
-    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+    <version>3.17.12-SNAPSHOT</version>
   </parent>
 
   <licenses>
@@ -51,6 +51,11 @@
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <groupId>org.apache.maven.plugins</groupId>
+        <configuration>
+          <includes>
+            <include>**/*.class</include>
+          </includes>
+        </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-failsafe-plugin</artifactId>
@@ -58,9 +63,6 @@
           <execution>
             <configuration>
               <encoding>UTF-8</encoding>
-              <includes>
-                <include>**/*.java</include>
-              </includes>
               <skip>${skipTests}</skip>
             </configuration>
             <goals>
@@ -87,8 +89,13 @@
     </dependency>
 
     <dependency>
-      <artifactId>junit</artifactId>
-      <groupId>junit</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <groupId>org.junit.jupiter</groupId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.vintage</groupId>
+      <artifactId>junit-vintage-engine</artifactId>
       <scope>test</scope>
     </dependency>
     <!-- VertX libraries -->
@@ -101,17 +108,13 @@
       <groupId>io.vertx</groupId>
     </dependency>
     <dependency>
-      <artifactId>vertx-web-api-contract</artifactId>
-      <groupId>io.vertx</groupId>
-    </dependency>
-    <dependency>
       <artifactId>vertx-config</artifactId>
       <groupId>io.vertx</groupId>
     </dependency>
 
     <dependency>
+      <groupId>io.rest-assured</groupId>
       <artifactId>rest-assured</artifactId>
-      <groupId>com.jayway.restassured</groupId>
     </dependency>
 
     <dependency>

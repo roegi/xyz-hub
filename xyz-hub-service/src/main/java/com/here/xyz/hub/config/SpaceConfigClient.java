@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,17 +19,14 @@
 
 package com.here.xyz.hub.config;
 
-import com.fasterxml.jackson.databind.MapperFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.here.xyz.XyzSerializable;
+import com.google.common.util.concurrent.Monitor;
+import com.here.xyz.events.PropertiesQuery;
 import com.here.xyz.hub.connectors.models.Space;
-import com.here.xyz.hub.rest.admin.AdminMessage;
-import com.here.xyz.hub.util.logging.Logging;
-import com.here.xyz.models.hub.Space.WithConnectors;
-import io.vertx.core.AsyncResult;
+import com.here.xyz.hub.rest.admin.messages.RelayedMessage;
+import com.here.xyz.util.di.ImplementationProvider;
+import com.here.xyz.util.service.Initializable;
 import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.json.Json;
+import io.vertx.core.Promise;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -40,152 +37,156 @@ import java.util.concurrent.TimeUnit;
 import net.jodah.expiringmap.ExpirationPolicy;
 import net.jodah.expiringmap.ExpiringMap;
 import org.apache.commons.lang3.RandomStringUtils;
-import org.slf4j.Marker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
+import org.apache.logging.log4j.Level;
 
-public abstract class SpaceConfigClient implements Initializable, Logging {
 
-  private static ThreadLocal<ObjectMapper> SPACE_CONFIG_MAPPER = ThreadLocal.withInitial(() -> {
-    ObjectMapper mapper = XyzSerializable.DEFAULT_MAPPER.get().copy();
-    return mapper
-        .disable(MapperFeature.DEFAULT_VIEW_INCLUSION)
-        .setConfig(mapper.getSerializationConfig().withView(WithConnectors.class));
-  });
+public abstract class SpaceConfigClient implements Initializable {
+
+  private static final Logger logger = LogManager.getLogger();
 
   public static final ExpiringMap<String, Space> cache = ExpiringMap.builder()
       .expirationPolicy(ExpirationPolicy.CREATED)
       .expiration(3, TimeUnit.MINUTES)
       .build();
 
-  private static final Map<String, ConcurrentLinkedQueue<Handler<AsyncResult<Space>>>> pendingHandlers = new ConcurrentHashMap<>();
+  private static final Map<String, ConcurrentLinkedQueue<Promise<Space>>> pendingGetCalls = new ConcurrentHashMap<>();
+  private static final Map<String, Monitor> getSpaceLocks = new ConcurrentHashMap<>();
   private SpaceSelectionCondition emptySpaceCondition = new SpaceSelectionCondition();
 
+  //Property keys for PropertyQuery
+  public static final String CONTENT_UPDATED_AT = "contentUpdatedAt";
+  public static final String UPDATED_AT = "updatedAt";
+
   public static SpaceConfigClient getInstance() {
-    // TODO remove the below comments when it's time to move to dynamo
-//    if (Service.configuration.SPACES_DYNAMODB_TABLE_ARN != null) {
-//      if (Service.configuration.STORAGE_DB_URL != null) {
-//        //We're in the migration phase
-//        return MigratingSpaceConnectorConfigClient.getInstance();
-//      }
-//      else
-//          return new DynamoSpaceConfigClient(Service.configuration.SPACES_DYNAMODB_TABLE_ARN);
-//    }
-//    else
-    return JDBCSpaceConfigClient.getInstance();
+    return Provider.provideInstance();
   }
 
-  public void get(Marker marker, String spaceId, Handler<AsyncResult<Space>> handler) {
+  public static abstract class Provider implements ImplementationProvider {
+    private static SpaceConfigClient client;
+    public Provider() {}
+    protected abstract SpaceConfigClient getInstance();
+    private static SpaceConfigClient provideInstance() {
+      if(client == null)
+        client = ImplementationProvider.loadProvider(Provider.class).getInstance();
+      return client;
+    }
+  }
+
+  public Future<Space> get(Marker marker, String spaceId) {
     Space cached = cache.get(spaceId);
     if (cached != null) {
-      logger().info(marker, "space[{}}]: Loaded space from cache: {}", spaceId, Json.encode(cached));
-      handler.handle(Future.succeededFuture(cached));
-      return;
+      logger.info(marker, "space[{}]: Loaded space with title \"{}\" from cache", spaceId, cached.getTitle());
+      return Future.succeededFuture(cached);
     }
 
     /*
     In case we get the query for a space of which a previous request is already in flight we wait for its response and call the callback
     then. This is a performance optimization for highly parallel requests coming from the user at once.
      */
-    boolean isFirstRequest = pendingHandlers.putIfAbsent(spaceId, new ConcurrentLinkedQueue<>()) == null;
-    pendingHandlers.get(spaceId).add(handler);
-    if (!isFirstRequest) {
-      return;
+    getSpaceLocks.putIfAbsent(spaceId, new Monitor());
+    Promise<Space> p = Promise.promise();
+    try {
+      getSpaceLocks.get(spaceId).enter();
+      boolean isFirstRequest = pendingGetCalls.putIfAbsent(spaceId, new ConcurrentLinkedQueue<>()) == null;
+      pendingGetCalls.get(spaceId).add(p);
+      if (!isFirstRequest) {
+        return p.future();
+      }
+    }
+    finally {
+      getSpaceLocks.get(spaceId).leave();
     }
 
-    getSpace(marker, spaceId, ar -> {
-      ConcurrentLinkedQueue<Handler<AsyncResult<Space>>> handlersToCall = pendingHandlers.remove(spaceId);
+    getSpace(marker, spaceId).onComplete(ar -> {
+      ConcurrentLinkedQueue<Promise<Space>> handlersToCall;
+      try {
+        getSpaceLocks.get(spaceId).enter();
+        handlersToCall = pendingGetCalls.remove(spaceId);
+      }
+      finally {
+        getSpaceLocks.get(spaceId).leave();
+      }
       if (ar.succeeded()) {
         Space space = ar.result();
         if (space != null) {
           cache.put(spaceId, space);
-          logger().info(marker, "space[{}}]: Loaded space: {} {}", spaceId, Json.encode(space), ar.cause());
+          logger.info(marker, "space[{}]: Loaded space with title: \"{}\"", spaceId, space.getTitle());
         } else {
-          logger().info(marker, "space[{}}]: Space with this ID was not found {}", spaceId, ar.cause());
+          logger.info(marker, "space[{}]: Space with this ID was not found", spaceId);
         }
         cache.put(spaceId, space);
-        handlersToCall.forEach(h -> h.handle(Future.succeededFuture(ar.result())));
-      } else {
-        logger().info(marker, "space[{}]: Failed to load the space, reason: {}", spaceId, ar.cause());
-        handlersToCall.forEach(h -> h.handle(Future.failedFuture(ar.cause())));
+        handlersToCall.forEach(h -> h.complete(ar.result()));
+      }
+      else {
+        logger.error(marker, "space[{}]: Failed to load the space, reason: {}", spaceId, ar.cause());
+        handlersToCall.forEach(h -> h.fail(ar.cause()));
       }
     });
+
+    return p.future();
   }
 
-  public void store(Marker marker, Space space, Handler<AsyncResult<Space>> handler) {
-    if (space.getId() == null) {
+  public Future<Void> store(Marker marker, Space space) {
+    if (space.getId() == null)
       space.setId(RandomStringUtils.randomAlphanumeric(10));
-    }
-
-    storeSpace(marker, space, ar -> {
-      if (ar.succeeded()) {
-        invalidateCache(space.getId());
-        logger().info(marker, "space[{}}]: Stored space: {}", space.getId(), Json.encode(space), ar.cause());
-        handler.handle(Future.succeededFuture(ar.result()));
-      } else {
-        logger().info(marker, "space[{}}]: Failed storing the space", space.getId(), ar.cause());
-        handler.handle(Future.failedFuture(ar.cause()));
-      }
-    });
+    return storeSpace(marker, space)
+        .onSuccess(v -> {
+          invalidateCache(space.getId());
+          logger.info(marker, "space[{}]: Stored successfully with title: \"{}\"", space.getId(), space.getTitle());
+        })
+        .onFailure(t -> logger.error(marker, "space[{}]: Failed storing the space", space.getId(), t));
   }
 
-  public void delete(Marker marker, String spaceId, Handler<AsyncResult<Space>> handler) {
-    deleteSpace(marker, spaceId, ar -> {
-      if (ar.succeeded()) {
-        invalidateCache(spaceId);
-        logger().info(marker, "space[{}}]: Deleted space", spaceId, ar.cause());
-        handler.handle(Future.succeededFuture(ar.result()));
-      } else {
-        logger().info(marker, "space[{}}]: Failed storing the space", spaceId, ar.cause());
-        handler.handle(Future.failedFuture(ar.cause()));
-      }
-    });
+  public Future<Space> delete(Marker marker, String spaceId) {
+    return deleteSpace(marker, spaceId)
+        .onSuccess(space -> {
+          invalidateCache(spaceId);
+          logger.info(marker, "space[{}]: Deleted space", spaceId);
+        })
+        .onFailure(t -> { 
+          Level logLevel = (t.getMessage() != null && t.getMessage().contains("space is null during space deletion")) ? Level.INFO : Level.ERROR;
+          logger.log(logLevel, marker, "space[{}]: Failed deleting the space", spaceId, t);
+      }) ;
   }
 
-  public void getSelected(Marker marker, SpaceAuthorizationCondition authorizedCondition, SpaceSelectionCondition selectedCondition,
-      Handler<AsyncResult<List<Space>>> handler) {
-    getSelectedSpaces(marker, authorizedCondition, selectedCondition, ar -> {
-      if (ar.succeeded()) {
-        List<Space> spaces = ar.result();
-        spaces.forEach(s -> cache.put(s.getId(), s));
-        logger().info(marker, "Loaded spaces by condition", ar.cause());
-        handler.handle(Future.succeededFuture(ar.result()));
-      } else {
-        logger().info(marker, "Failed to load spaces by condition", ar.cause());
-        handler.handle(Future.failedFuture(ar.cause()));
-      }
-    });
+  public Future<List<Space>> getSelected(Marker marker, SpaceAuthorizationCondition authorizedCondition,
+      SpaceSelectionCondition selectedCondition, PropertiesQuery propsQuery) {
+    return getSelectedSpaces(marker, authorizedCondition, selectedCondition, propsQuery)
+        .onSuccess(spaces -> {
+          spaces.forEach(s -> cache.put(s.getId(), s));
+          logger.info(marker, "Loaded spaces by condition");
+        })
+        .onFailure(t -> logger.error(marker, "Failed to load spaces by condition", t));
   }
 
-  public void getOwn(Marker marker, String ownerId, Handler<AsyncResult<List<Space>>> handler) {
+  public Future<List<Space>> getSpacesForOwner(Marker marker, String ownerId) {
     SpaceSelectionCondition selectedCondition = new SpaceSelectionCondition();
     selectedCondition.ownerIds = Collections.singleton(ownerId);
     selectedCondition.shared = false;
-    getSelected(marker, emptySpaceCondition, selectedCondition, handler);
+    return getSelected(marker, emptySpaceCondition, selectedCondition, null);
   }
 
-  protected abstract void getSpace(Marker marker, String spaceId, Handler<AsyncResult<Space>> handler);
+  protected abstract Future<Space> getSpace(Marker marker, String spaceId);
 
-  protected abstract void storeSpace(Marker marker, Space space, Handler<AsyncResult<Space>> handler);
+  protected abstract Future<Void> storeSpace(Marker marker, Space space);
 
-  protected abstract void deleteSpace(Marker marker, String spaceId, Handler<AsyncResult<Space>> handler);
+  protected abstract Future<Space> deleteSpace(Marker marker, String spaceId);
 
-  protected abstract void getSelectedSpaces(Marker marker, SpaceAuthorizationCondition authorizedCondition,
-      SpaceSelectionCondition selectedCondition, Handler<AsyncResult<List<Space>>> handler);
+  protected abstract Future<List<Space>> getSelectedSpaces(Marker marker, SpaceAuthorizationCondition authorizedCondition,
+      SpaceSelectionCondition selectedCondition, PropertiesQuery propsQuery);
+
+  public abstract Future<List<Space>> getSpacesFromSuper(Marker marker, String parentSpaceId);
 
   public void invalidateCache(String spaceId) {
     cache.remove(spaceId);
-    new InvalidateSpaceCacheMessage().withId(spaceId).broadcast();
-  }
-
-  protected static final ObjectMapper defaultMapper() {
-    return XyzSerializable.DEFAULT_MAPPER.get();
-  }
-
-  protected static final ObjectMapper defaultConverter() {
-    return SPACE_CONFIG_MAPPER.get();
+    new InvalidateSpaceCacheMessage().withId(spaceId).withGlobalRelay(true).broadcast();
   }
 
   public static class SpaceAuthorizationCondition {
-
+    public boolean anonymous;
     public Set<String> spaceIds;
     public Set<String> ownerIds;
     public Set<String> packages;
@@ -195,9 +196,12 @@ public abstract class SpaceConfigClient implements Initializable, Logging {
 
     public boolean shared = true;
     public boolean negateOwnerIds = false;
+    public String tagId;
+    public String region;
+    public String prefix;
   }
 
-  public static class InvalidateSpaceCacheMessage extends AdminMessage {
+  public static class InvalidateSpaceCacheMessage extends RelayedMessage {
 
     private String id;
 
@@ -215,7 +219,7 @@ public abstract class SpaceConfigClient implements Initializable, Logging {
     }
 
     @Override
-    protected void handle() {
+    protected void handleAtDestination() {
       cache.remove(id);
     }
   }

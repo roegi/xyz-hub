@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,22 +20,28 @@
 package com.here.xyz.models.geojson.implementation;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonTypeName;
+import com.fasterxml.jackson.annotation.JsonView;
 import com.here.xyz.Extensible;
 import com.here.xyz.Typed;
+import com.here.xyz.XyzSerializable;
+import com.here.xyz.XyzSerializable.Public;
+import com.here.xyz.XyzSerializable.Static;
 import com.here.xyz.models.geojson.coordinates.BBox;
 import com.here.xyz.models.geojson.exceptions.InvalidGeometryException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeName(value = "Feature")
+@JsonView({Public.class, Static.class})
 @SuppressWarnings({"unused", "WeakerAccess"})
 public class Feature extends Extensible<Feature> implements Typed {
 
   private String id;
   private BBox bbox;
+  @JsonInclude(Include.ALWAYS)
+  @JsonView({Public.class})
   private Geometry geometry;
   private Properties properties;
 
@@ -62,61 +68,10 @@ public class Feature extends Extensible<Feature> implements Typed {
    * @param space the full qualified space identifier in which this feature is stored (so prefix and base part combined, e.g. "x-foo").
    * @throws NullPointerException if feature, space or the 'id' of the feature are null.
    */
-  @SuppressWarnings("unused")
-  public static void finalizeFeature(final Feature feature, final String space) throws NullPointerException {
-    finalizeFeature(feature, space, true);
-  }
-
-  /**
-   * Updates the {@link XyzNamespace} properties in a feature so that all values are valid.
-   *
-   * @param feature the feature for which to update the {@link XyzNamespace} map.
-   * @param space the full qualified space identifier in which this feature is stored (so prefix and base part combined, e.g. "x-foo").
-   * @param addUUID If the uuid to be added or not.
-   * @throws NullPointerException if feature, space or the 'id' of the feature are null.
-   */
   @SuppressWarnings("WeakerAccess")
-  public static void finalizeFeature(final Feature feature, final String space, boolean addUUID) throws NullPointerException {
-    if (feature == null) {
-      throw new NullPointerException("feature");
-    }
-    if (space == null) {
-      throw new NullPointerException("space");
-    }
-
-    if (feature.getProperties() == null) {
-      feature.setProperties(new Properties());
-    }
-
-    final Properties props = feature.getProperties();
-    if (props.getXyzNamespace() == null) {
-      props.setXyzNamespace(new XyzNamespace());
-    }
-
-    final XyzNamespace nsXyz = props.getXyzNamespace();
-    nsXyz.setSpace(space);
-
-    final long now = System.currentTimeMillis();
-    final List<String> tags = nsXyz.getTags();
-
-    if (tags != null) {
-      XyzNamespace.normalizeTagsOfFeature(feature);
-    } else {
-      nsXyz.setTags(new ArrayList<>());
-    }
-    if (nsXyz.getCreatedAt() == 0) {
-      nsXyz.setCreatedAt(now);
-    }
-    nsXyz.setUpdatedAt(now);
-    if (addUUID) {
-      String puuid = nsXyz.getUuid();
-      if (puuid != null) {
-        nsXyz.setPuuid(puuid);
-      }
-      nsXyz.setUuid(UUID.randomUUID().toString());
-    }
-
-    nsXyz.setInputPosition(null);
+  public static void finalizeFeature(final Feature feature, final String space) throws NullPointerException {
+    final XyzNamespace xyzNamespace = feature.getProperties().getXyzNamespace();
+    xyzNamespace.setInputPosition(null);
   }
 
   public String getId() {
@@ -203,6 +158,19 @@ public class Feature extends Extensible<Feature> implements Typed {
       return;
     }
 
+    if(geometry instanceof GeometryCollection)
+      throw new InvalidGeometryException("GeometryCollection is not supported.");
+
     geometry.validate();
+  }
+
+  @Override
+  public String toString() {
+    return serialize();
+  }
+
+  @Override
+  public boolean equals(Object obj) {
+    return XyzSerializable.equals(this, obj);
   }
 }

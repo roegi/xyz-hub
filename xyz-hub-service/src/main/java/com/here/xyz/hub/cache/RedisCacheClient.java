@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,103 +20,140 @@
 package com.here.xyz.hub.cache;
 
 import com.here.xyz.hub.Service;
-import com.here.xyz.hub.util.logging.Logging;
-import io.vertx.core.Handler;
-import io.vertx.core.buffer.Buffer;
-import io.vertx.redis.RedisClient;
-import io.vertx.redis.RedisOptions;
-import io.vertx.redis.op.SetOptions;
+import com.here.xyz.util.service.Core;
+import io.vertx.core.Future;
+import io.vertx.core.net.NetClientOptions;
+import io.vertx.redis.client.Command;
+import io.vertx.redis.client.Redis;
+import io.vertx.redis.client.RedisOptions;
+import io.vertx.redis.client.Request;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-public class RedisCacheClient implements CacheClient, Logging {
+public class RedisCacheClient implements CacheClient {
 
-  private RedisOptions config;
+  private static CacheClient instance;
+  private static final Logger logger = LogManager.getLogger();
+  private ThreadLocal<Redis> redis;
+  private String connectionString = Service.configuration.getRedisUri();
+  RedisOptions config = new RedisOptions()
+      .setConnectionString(connectionString)
+      .setNetClientOptions(new NetClientOptions()
+          .setHostnameVerificationAlgorithm("") //TODO: temp disable hostname verification
+          .setTcpKeepAlive(true)
+          .setIdleTimeout(30)
+          .setConnectTimeout(2000));
+  private static final String RND = UUID.randomUUID().toString();
 
-  private RedisClient redis;
-
-  public RedisCacheClient() {
-    config = new RedisOptions()
-        .setHost(Service.configuration.XYZ_HUB_REDIS_HOST)
-        .setPort(Service.configuration.XYZ_HUB_REDIS_PORT);
-    config.setConnectTimeout(2000);
-    redis = RedisClient.create(Service.vertx, config);
+  private RedisCacheClient() {
+    //Use redis auth token when available
+    if (Service.configuration.XYZ_HUB_REDIS_AUTH_TOKEN != null)
+      config.setPassword(Service.configuration.XYZ_HUB_REDIS_AUTH_TOKEN);
+    redis = ThreadLocal.withInitial(() -> Redis.createClient(Core.vertx, config));
   }
 
-  public static CacheClient create() {
-    if (Service.configuration.XYZ_HUB_REDIS_HOST == null)
-      return new NoopCacheClient();
-    try {
-      return new RedisCacheClient();
-    } catch (Exception e) {
-      Logging.getLogger().error("Error when trying to create the Redis client.", e);
-      return new NoopCacheClient();
+  public static synchronized CacheClient getInstance() {
+    if (instance != null)
+      return instance;
+
+    if (Service.configuration.getRedisUri() == null)
+      instance = new NoopCacheClient();
+    else {
+      try {
+        instance = new RedisCacheClient();
+      }
+      catch (Exception e) {
+        logger.error("Error when trying to create the Redis client.", e);
+        instance = new NoopCacheClient();
+      }
     }
+    return instance;
+  }
+
+  protected Redis getClient() {
+    return redis.get();
   }
 
   @Override
-  public void get(String key, Handler<String> handler) {
-    redis.get(key, asyncResult -> {
-      if (asyncResult.failed()) {
-//				logger.error("Error when trying to read key " + key + " from redis cache", asyncResult.cause());
-      }
-      handler.handle(asyncResult.result());
-    });
+  public Future<byte[]> get(String key) {
+    Request req = Request.cmd(Command.GET).arg(key);
+    return getClient().send(req)
+        .compose(response -> Future.succeededFuture(response == null ? null : response.toBytes()), t -> {
+          logger.warn("Error when trying to read key " + key + " from redis cache", t);
+          return Future.succeededFuture(null);
+        });
   }
 
   @Override
-  public void getBinary(String key, Handler<byte[]> handler) {
-    redis.getBinary(key, asyncResult -> {
-      if (asyncResult.failed()) {
-//				logger.error("Error when trying to read key " + key + " from redis cache", asyncResult.cause());
-      }
-      final Buffer result = asyncResult.result();
-      handler.handle(result == null ? null : result.getBytes());
-    });
-  }
-
-  @Override
-  public void set(String key, String value, long ttl) {
-    redis.setex(key, ttl, value, asyncResult -> {
-      //set command was executed. Nothing to do here.coo
-      if (asyncResult.failed()) {
-        //logger.error("Error when trying to put key " + key + " to redis cache", asyncResult.cause());
-      }
-    });
-  }
-
-  @Override
-  public void setBinary(String key, byte[] value, long ttl) {
-    redis.setBinaryWithOptions(key, Buffer.buffer(value), new SetOptions().setEX(ttl), asyncResult -> {
-      //set command was executed. Nothing to do here.
-      if (asyncResult.failed()) {
-        //logger.error("Error when trying to put key " + key + " to redis cache", asyncResult.cause());
+  public void set(String key, byte[] value, long ttl) {
+    Request req = Request.cmd(Command.SET).arg(key).arg(value).arg("EX").arg(ttl);
+    getClient().send(req).onComplete(ar -> {
+      //SET command was executed. Nothing to do here.
+      if (ar.failed()) {
+        logger.warn("Error when trying to put key " + key + " to redis cache", ar.cause());
       }
     });
   }
 
   @Override
   public void remove(String key) {
-    redis.del(key, response -> {
-      //del command was executed. Nothing to do here.
-      //TODO: Maybe add some debug logging in case of response.failed() here?
+    Request req = Request.cmd(Command.DEL).arg(key);
+    getClient().send(req).onComplete(ar -> {
+      //DEL command was executed. Nothing to do here.
+      if (ar.failed()) {
+        logger.warn("Error removing cache entry for key {}.", key, ar.cause());
+      }
     });
   }
 
   @Override
   public void shutdown() {
-    if (redis != null) {
-      redis.close(r -> {
-        synchronized (this) {
-          this.notify();
-        }
-      });
-    }
-    synchronized (this) {
-      try {
-        this.wait(2000);
-      } catch (InterruptedException e) {
-        //Nothing to do.
+    if (redis != null)
+      getClient().close();
+  }
+
+  /**
+   * Acquires the lock on the specified key and sets a ttl in seconds.
+   * Implementation based on https://redis.io/topics/distlock for single Redis instances
+   * @param key the key which the lock will be acquired
+   * @param ttl the expiration time in seconds for this lock be automatically released
+   * @return true in case the lock was successfully acquired. False otherwise.
+   */
+  public boolean acquireLock(String key, long ttl) {
+    Request req = Request.cmd(Command.SET).arg(key).arg(RND).arg("NX").arg("EX").arg(ttl);
+    CompletableFuture<Boolean> f = new CompletableFuture<>();
+    getClient().send(req).onComplete(ar -> {
+      if (ar.failed()) {
+        logger.warn("Error acquiring lock for key {}.", key, ar.cause());
+        f.complete(false);
       }
+      else if (ar.result() == null)
+        f.complete(false);
+      else
+        f.complete("OK".equals(ar.result().toString()));
+    });
+    try {
+      return f.get();
+    }
+    catch (ExecutionException | InterruptedException e) {
+      return false;
     }
   }
 
+  /**
+   * Releases the lock acquired by acquireLock. The key must match with the lock acquired previously.
+   * @param key the key which the lock was acquired
+   */
+  public void releaseLock(String key) {
+    final String luaScript = "if redis.call(\"get\",KEYS[1]) == ARGV[1] then return redis.call(\"del\",KEYS[1]) else return 0 end";
+    Request req = Request.cmd(Command.EVAL).arg(luaScript).arg(1).arg(key).arg(RND);
+    getClient().send(req).onComplete(ar -> {
+      if (ar.failed()) {
+        logger.warn("Error releasing lock for key {}.", key, ar.cause());
+      }
+    });
+  }
 }

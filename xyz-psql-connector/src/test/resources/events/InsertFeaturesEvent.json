@@ -2,13 +2,18 @@
   "type": "ModifyFeaturesEvent",
   "space": "foo",
   "params": {},
+  "connectorParams": {
+    "propertySearch": true,
+    "connectorId": "test-connector"
+  },
   "insertFeatures": [
     {
       "geometry": {
         "type": "Point",
         "coordinates": [
           14.3222,
-          -2.32506
+          -2.32506,
+          0
         ]
       },
       "type": "Feature",
@@ -17,6 +22,9 @@
         "size": 8.5,
         "car": true,
         "@ns:com:here:xyz": {
+          "space" : "foo",
+          "createdAt" : 1517504700726,
+          "updatedAt" : 1517504700726,
           "tags": [
             "yellow"
           ]
@@ -28,13 +36,17 @@
         "type": "Point",
         "coordinates": [
           14.3222,
-          -2.32506
+          -2.32506,
+          0
         ]
       },
       "type": "Feature",
       "properties": {
         "name": "Tesla",
         "@ns:com:here:xyz": {
+          "space" : "foo",
+          "createdAt" : 1517504700726,
+          "updatedAt" : 1517504700726,
           "tags": [
             "red"
           ]

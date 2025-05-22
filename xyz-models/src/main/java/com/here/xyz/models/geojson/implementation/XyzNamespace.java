@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,43 +29,51 @@ import java.util.ArrayList;
 import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
+@JsonInclude(Include.NON_DEFAULT)
 public class XyzNamespace implements XyzSerializable {
 
   public static final String XYZ_NAMESPACE = "@ns:com:here:xyz";
 
   @JsonProperty("_inputPosition")
   private Long inputPosition;
+
+  /**
+   * The space ID the feature belongs to.
+   */
   private String space;
+
   /**
    * The timestamp, when a feature was created.
    */
-  @JsonInclude(Include.NON_DEFAULT)
   private long createdAt;
+
   /**
    * The timestamp, when a feature was last updated.
    */
-  @JsonInclude(Include.NON_DEFAULT)
   private long updatedAt;
+
   /**
-   * The uuid of the feature. When the client modifies the feature it must not modify the uuid.
+   * The list of tags being attached to the feature.
    */
-  private String uuid;
-  /**
-   * The previous uuid of the feature.
-   */
-  private String puuid;
-  /**
-   * The uuid of the merged feature, in case a merge was performed.
-   */
-  private String muuid;
   private List<String> tags;
 
   /**
-   * A flag indicating the object should be treated as being deleted. This flag is only informative and is not relevant for the XYZ Hub
-   * rather it could be interpreted by clients or processors & listeners.
+   * A flag indicating the object should be treated as being deleted.
    */
-  @JsonInclude(Include.NON_DEFAULT)
   private boolean deleted;
+
+  /**
+   * The space-version of the feature within the space's versions.
+   * Multiple features share the same space-version if they have been edited in one transaction.
+   */
+  private long version = -1;
+
+  /**
+   * The author that changed the feature in the current version.
+   * Multiple features share the same author if they have been edited in one transaction.
+   */
+  @JsonInclude(Include.NON_EMPTY)
+  private String author;
 
   /**
    * A method to normalize and lower case a tag.
@@ -114,32 +122,6 @@ public class XyzNamespace implements XyzSerializable {
   }
 
   /**
-   * A method to normalize all tags of the given feature.
-   *
-   * @param feature the feature in which to normalize the tags.
-   */
-  static void normalizeTagsOfFeature(final Feature feature) {
-    if (feature == null) {
-      return;
-    }
-    final Properties properties = feature.getProperties();
-    if (properties == null) {
-      return;
-    }
-    final XyzNamespace nsXyz = properties.getXyzNamespace();
-    if (nsXyz == null) {
-      return;
-    }
-    final List<String> tags = nsXyz.getTags();
-    if (tags == null) {
-      return;
-    }
-    for (int i = 0; i < tags.size(); i++) {
-      tags.set(i, normalizeTag(tags.get(i)));
-    }
-  }
-
-  /**
    * This method is a hot-fix for an issue of plenty of frameworks. For example vertx does automatically URL decode query parameters (as
    * certain other frameworks may as well). This is often very hard to fix, even while RFC-3986 is very clear about that reserved characters
    * may have semantic meaning when not being URI encoded and MUST be URI encoded to take away the meaning. Therefore there normally must be
@@ -153,7 +135,7 @@ public class XyzNamespace implements XyzSerializable {
    * @see [https://tools.ietf.org/html/rfc3986#section-2.2]
    */
   @SuppressWarnings("WeakerAccess")
-  public static void fixNormalizedTags(final List<String> tags) {
+  public static List<String> fixNormalizedTags(final List<String> tags) {
     int j = 0;
     StringBuilder sb = null;
     while (j < tags.size()) {
@@ -195,6 +177,7 @@ public class XyzNamespace implements XyzSerializable {
         j++;
       }
     }
+    return tags;
   }
 
   @SuppressWarnings("unused")
@@ -253,51 +236,6 @@ public class XyzNamespace implements XyzSerializable {
 
   public XyzNamespace withUpdatedAt(long updatedAt) {
     setUpdatedAt(updatedAt);
-    return this;
-  }
-
-  @SuppressWarnings("WeakerAccess")
-  public String getUuid() {
-    return uuid;
-  }
-
-  @SuppressWarnings("WeakerAccess")
-  public void setUuid(String uuid) {
-    this.uuid = uuid;
-  }
-
-  public XyzNamespace withUuid(String uuid) {
-    setUuid(uuid);
-    return this;
-  }
-
-  @SuppressWarnings("unused")
-  public String getPuuid() {
-    return puuid;
-  }
-
-  @SuppressWarnings("WeakerAccess")
-  public void setPuuid(String puuid) {
-    this.puuid = puuid;
-  }
-
-  public XyzNamespace withPuuid(String puuid) {
-    setPuuid(puuid);
-    return this;
-  }
-
-  @SuppressWarnings("unused")
-  public String getMuuid() {
-    return muuid;
-  }
-
-  @SuppressWarnings("unused")
-  public void setMuuid(String muuid) {
-    this.muuid = muuid;
-  }
-
-  public XyzNamespace withMuuid(String muuid) {
-    setMuuid(muuid);
     return this;
   }
 
@@ -368,6 +306,34 @@ public class XyzNamespace implements XyzSerializable {
   @SuppressWarnings("unused")
   public XyzNamespace withDeleted(boolean deleted) {
     setDeleted(deleted);
+    return this;
+  }
+
+  public long getVersion() {
+    return version;
+  }
+
+  public void setVersion(long version) {
+    this.version = version;
+  }
+
+  @SuppressWarnings("unused")
+  public XyzNamespace withVersion(long version) {
+    setVersion(version);
+    return this;
+  }
+
+  public String getAuthor() {
+    return author;
+  }
+
+  public void setAuthor(String author) {
+    this.author = author;
+  }
+
+  @SuppressWarnings("unused")
+  public XyzNamespace withAuthor(String author) {
+    setAuthor(author);
     return this;
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,16 +28,16 @@ import static org.junit.Assert.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.here.xyz.events.CountFeaturesEvent;
 import com.here.xyz.events.EventNotification;
 import com.here.xyz.events.ModifyFeaturesEvent;
 import com.here.xyz.models.geojson.implementation.Feature;
-import com.here.xyz.models.geojson.implementation.XyzError;
 import com.here.xyz.models.hub.Space;
 import com.here.xyz.responses.ErrorResponse;
+import com.here.xyz.responses.XyzError;
 import java.io.IOException;
 import org.junit.Test;
 
+@SuppressWarnings("unused")
 public class JsonMappingTest {
 
   @Test
@@ -60,7 +60,7 @@ public class JsonMappingTest {
 
     String result = obj.serialize();
 
-    final String string1 = "{\"id\":\"xyz123\",\"properties\":{\"x\":5,\"y\":7},\"type\":\"Feature\"}";
+    final String string1 = "{\"id\":\"xyz123\",\"properties\":{\"x\":5,\"y\":7},\"type\":\"Feature\",\"geometry\":null}";
     assertTrue(jsonCompare(string1, result));
   }
 
@@ -81,27 +81,6 @@ public class JsonMappingTest {
   }
 
   @Test
-  public void testNativeAWSLambdaErrorMessage() throws Exception {
-    final String json = "{\"errorMessage\":\"2018-09-15T07:12:25.013Z a368c0ea-b8b6-11e8-b894-eb5a7755e998 Task timed out after 25.01 seconds\"}";
-    ErrorResponse obj = new ErrorResponse();
-    obj = new ObjectMapper().readerForUpdating(obj).readValue(json);
-    assertNotNull(obj);
-    obj = XyzSerializable.fixAWSLambdaResponse(obj);
-    assertSame(XyzError.TIMEOUT, obj.getError());
-    assertEquals("2018-09-15T07:12:25.013Z a368c0ea-b8b6-11e8-b894-eb5a7755e998 Task timed out after 25.01 seconds",
-        obj.getErrorMessage());
-  }
-
-  @Test
-  public void test_map() throws Exception {
-    final String json = "{\"type\":\"CountFeaturesEvent\", \"space\":\"test\"}";
-    CountFeaturesEvent obj = new ObjectMapper().readValue(json, CountFeaturesEvent.class);
-    assertNotNull(obj);
-  }
-
-
-  //@Test
-  //TODO: Please change the URL to some file:/// URL
   public void parseTest() throws Exception {
     final String json = "{ \"type\": \"EventNotification\", \"eventType\": \"ModifyFeaturesEvent.request\", \"event\": { \"type\": \"ModifyFeaturesEvent\", \"space\": \"foo\", \"params\": { \"schemaUrl\": \"file:///someSchema.json\" }, \"insertFeatures\": [ { \"geometry\": { \"type\": \"Point\", \"coordinates\": [ 14.3222, -2.32506 ] }, \"type\": \"Feature\", \"properties\": { \"name\": \"Toyota\", \"@ns:com:here:xyz\": { \"tags\": [ \"yellow\" ] } } }, { \"geometry\": { \"type\": \"Point\", \"coordinates\": [ 14.3222, -2.32506 ] }, \"type\": \"Feature\", \"properties\": { \"name\": \"Tesla\", \"@ns:com:here:xyz\": { \"tags\": [ \"red\" ] } } } ] } }";
     EventNotification obj = new ObjectMapper().readValue(json, EventNotification.class);
@@ -139,7 +118,6 @@ public class JsonMappingTest {
     assertEquals(1, p.getParams().get("not_the_real_order"));
     assertNull(p.getId());
 
-    //System.out.println(mapper.writeValueAsString(space));
   }
 
   @Test
@@ -170,7 +148,6 @@ public class JsonMappingTest {
     p = space.getListeners().get("schema-validator").get(0);
     assertEquals(Integer.valueOf(1), p.getOrder());
     assertEquals(1, p.getParams().get("not_the_real_order"));
-    //System.out.println(mapper.writeValueAsString(space));
   }
 
   @Test
@@ -225,8 +202,8 @@ public class JsonMappingTest {
     ObjectMapper mapper = new ObjectMapper().configure(SerializationFeature.INDENT_OUTPUT, true);
     JsonNode node = mapper.readValue(JsonMappingTest.class.getResourceAsStream("test/SpaceWithListenersAsMap.json"), JsonNode.class);
     Space space = mapper.convertValue(node, Space.class);
-    System.out.println(mapper.writeValueAsString(space));
   }
+
   @Test
   public void testSpaceWithNullListeners() throws Exception {
     ObjectMapper mapper = new ObjectMapper().configure(SerializationFeature.INDENT_OUTPUT, true);
@@ -236,6 +213,5 @@ public class JsonMappingTest {
     assertTrue(space.getListeners().containsKey("schema-validator"));
     assertNull(space.getListeners().get("schema-validator"));
     assertNull(space.getProcessors());
-    //System.out.println(mapper.writeValueAsString(space));
   }
 }

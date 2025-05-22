@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,30 +19,40 @@
 
 package com.here.xyz.hub.connectors.test;
 
+import static com.here.xyz.responses.XyzError.ILLEGAL_ARGUMENT;
+
 import com.here.xyz.connectors.ErrorResponseException;
 import com.here.xyz.connectors.StorageConnector;
-import com.here.xyz.events.CountFeaturesEvent;
-import com.here.xyz.events.DeleteFeaturesByTagEvent;
+import com.here.xyz.events.DeleteChangesetsEvent;
 import com.here.xyz.events.Event;
+import com.here.xyz.events.GetChangesetStatisticsEvent;
 import com.here.xyz.events.GetFeaturesByBBoxEvent;
 import com.here.xyz.events.GetFeaturesByGeometryEvent;
 import com.here.xyz.events.GetFeaturesByIdEvent;
 import com.here.xyz.events.GetFeaturesByTileEvent;
 import com.here.xyz.events.GetStatisticsEvent;
+import com.here.xyz.events.GetStorageStatisticsEvent;
+import com.here.xyz.events.IterateChangesetsEvent;
 import com.here.xyz.events.IterateFeaturesEvent;
 import com.here.xyz.events.LoadFeaturesEvent;
 import com.here.xyz.events.ModifyFeaturesEvent;
 import com.here.xyz.events.ModifySpaceEvent;
+import com.here.xyz.events.ModifySubscriptionEvent;
 import com.here.xyz.events.SearchForFeaturesEvent;
+import com.here.xyz.events.WriteFeaturesEvent;
 import com.here.xyz.models.geojson.coordinates.PointCoordinates;
 import com.here.xyz.models.geojson.implementation.Feature;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
 import com.here.xyz.models.geojson.implementation.Point;
 import com.here.xyz.models.geojson.implementation.Properties;
-import com.here.xyz.models.geojson.implementation.XyzError;
 import com.here.xyz.models.geojson.implementation.XyzNamespace;
+import com.here.xyz.responses.ChangesetsStatisticsResponse;
+import com.here.xyz.responses.StatisticsResponse;
+import com.here.xyz.responses.StorageStatistics;
 import com.here.xyz.responses.SuccessResponse;
-import com.here.xyz.responses.XyzResponse;
+import com.here.xyz.responses.XyzError;
+import com.here.xyz.responses.changesets.ChangesetCollection;
+import com.here.xyz.util.service.Core;
 import java.util.Arrays;
 import org.apache.commons.lang3.RandomStringUtils;
 
@@ -50,58 +60,57 @@ import org.apache.commons.lang3.RandomStringUtils;
  * A connector for testing handling of error responses in the service.
  */
 public class TestStorageConnector extends StorageConnector {
-
   //NOTE: this is is a special space ID. For it the connector will return a feature with a random id for each tile request.
   public static final String RANDOM_FEATURE_SPACE = "random_feature_test";
+  public static final String ILLEGAL_ARGUMENT_SPACE = "illegal_argument_test";
   public static final String HUGE_RESPONSE_SPACE = "huge_response_test_";
   private static Feature sampleKBFeature = new Feature()
       .withId(RandomStringUtils.randomAlphanumeric(16))
       .withGeometry(new Point().withCoordinates(new PointCoordinates(10, 10)))
       .withProperties(new Properties().withXyzNamespace(new XyzNamespace()
-          .withCreatedAt(System.currentTimeMillis())
-          .withUpdatedAt(System.currentTimeMillis())));
-
-  public static void main(String[] args) {
-    System.out.println(sampleKBFeature.serialize().getBytes().length);
-  }
+          .withCreatedAt(Core.currentTimeMillis())
+          .withUpdatedAt(Core.currentTimeMillis())));
 
   @Override
-  protected XyzResponse processModifySpaceEvent(ModifySpaceEvent event) throws Exception {
-    if (RANDOM_FEATURE_SPACE.equals(event.getSpace())) {
+  protected SuccessResponse processModifySpaceEvent(ModifySpaceEvent event) throws Exception {
+    if (RANDOM_FEATURE_SPACE.equals(event.getSpace()) || ILLEGAL_ARGUMENT_SPACE.equals(event.getSpace())
+        || event.getSpace().contains(HUGE_RESPONSE_SPACE))
       return new SuccessResponse();
-    }
-    if (event.getSpace().startsWith(HUGE_RESPONSE_SPACE)) {
+
+    if (XyzError.forValue(event.getSpace()) != null)
       return new SuccessResponse();
-    }
-    if (XyzError.forValue(event.getSpace()) != null) {
-      return new SuccessResponse();
-    }
-    throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
-  }
 
-
-  @Override
-  protected XyzResponse processGetStatistics(GetStatisticsEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processGetFeaturesByIdEvent(GetFeaturesByIdEvent event) throws Exception {
+  protected SuccessResponse processModifySubscriptionEvent(ModifySubscriptionEvent event) throws Exception {
+    //Needs further implementation
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processGetFeaturesByGeometryEvent(GetFeaturesByGeometryEvent event) throws Exception {
+  protected StatisticsResponse processGetStatistics(GetStatisticsEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processGetFeaturesByBBoxEvent(GetFeaturesByBBoxEvent event) throws Exception {
+  protected FeatureCollection processGetFeaturesByIdEvent(GetFeaturesByIdEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processGetFeaturesByTileEvent(GetFeaturesByTileEvent event) throws Exception {
+  protected FeatureCollection processGetFeaturesByGeometryEvent(GetFeaturesByGeometryEvent event) throws Exception {
+    throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
+  }
+
+  @Override
+  protected FeatureCollection processGetFeaturesByBBoxEvent(GetFeaturesByBBoxEvent event) throws Exception {
+    throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
+  }
+
+  @Override
+  protected FeatureCollection processGetFeaturesByTileEvent(GetFeaturesByTileEvent event) throws Exception {
     final String space = event.getSpace();
     if (space.equals(RANDOM_FEATURE_SPACE)) {
       FeatureCollection fc = new FeatureCollection()
@@ -110,10 +119,11 @@ public class TestStorageConnector extends StorageConnector {
               .withGeometry(new Point().withCoordinates(new PointCoordinates(0, 0)))
               .withProperties(new Properties())));
       return fc;
-    } else if (space.startsWith(HUGE_RESPONSE_SPACE)) {
-      int size = Integer.parseInt(space.substring(HUGE_RESPONSE_SPACE.length())) * 1024 * 1024;
+    }
+    else if (space.contains(HUGE_RESPONSE_SPACE)) {
+      int size = Integer.parseInt(space.substring(space.lastIndexOf("_")+1)) * 1024 * 1024;
 
-      int numFeatures = size / sampleKBFeature.serialize().getBytes().length;
+      int numFeatures = size / sampleKBFeature.toByteArray().length;
 
       FeatureCollection fc = new FeatureCollection();
 
@@ -126,33 +136,56 @@ public class TestStorageConnector extends StorageConnector {
   }
 
   @Override
-  protected XyzResponse processIterateFeaturesEvent(IterateFeaturesEvent event) throws Exception {
+  protected FeatureCollection processIterateFeaturesEvent(IterateFeaturesEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processSearchForFeaturesEvent(SearchForFeaturesEvent event) throws Exception {
+  protected FeatureCollection processSearchForFeaturesEvent(SearchForFeaturesEvent event) throws Exception {
+    if (ILLEGAL_ARGUMENT_SPACE.equals(event.getSpace()))
+      throw new ErrorResponseException(ILLEGAL_ARGUMENT, "Invalid request parameters.");
+
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processCountFeaturesEvent(CountFeaturesEvent event) throws Exception {
+  protected FeatureCollection processLoadFeaturesEvent(LoadFeaturesEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processDeleteFeaturesByTagEvent(DeleteFeaturesByTagEvent event) throws Exception {
+  protected FeatureCollection processModifyFeaturesEvent(ModifyFeaturesEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processLoadFeaturesEvent(LoadFeaturesEvent event) throws Exception {
+  protected FeatureCollection processWriteFeaturesEvent(WriteFeaturesEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
   }
 
   @Override
-  protected XyzResponse processModifyFeaturesEvent(ModifyFeaturesEvent event) throws Exception {
+  protected StorageStatistics processGetStorageStatisticsEvent(GetStorageStatisticsEvent event) throws Exception {
     throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
+  }
+
+  @Override
+  protected SuccessResponse processDeleteChangesetsEvent(DeleteChangesetsEvent event) throws Exception {
+    throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
+  }
+
+  @Override
+  protected ChangesetCollection processIterateChangesetsEvent(IterateChangesetsEvent event) throws Exception {
+    throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
+  }
+
+  @Override
+  protected ChangesetsStatisticsResponse processGetChangesetsStatisticsEvent(GetChangesetStatisticsEvent event) throws Exception {
+    throw new ErrorResponseException(event.getStreamId(), XyzError.forValue(event.getSpace()), event.getSpace() + " message.");
+  }
+
+  @Override
+  protected void handleProcessingException(Exception exception, Event event) throws Exception {
+    throw exception;
   }
 
   @Override

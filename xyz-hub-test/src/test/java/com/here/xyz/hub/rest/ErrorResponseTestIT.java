@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,12 +19,13 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_GEO_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 
 import com.here.xyz.models.geojson.coordinates.PointCoordinates;
@@ -34,9 +35,8 @@ import com.here.xyz.models.hub.Space;
 import com.here.xyz.models.hub.Space.ConnectorRef;
 import io.vertx.core.json.Json;
 import org.junit.After;
+import org.junit.Ignore;
 import org.junit.Test;
-
-import java.io.IOException;
 
 public class ErrorResponseTestIT extends TestSpaceWithFeature {
 
@@ -66,7 +66,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(Json.encode(space)).
         when().post("/spaces").then().
-        statusCode(BAD_REQUEST.code());
+        statusCode(NOT_FOUND.code());
   }
 
   @Test
@@ -168,6 +168,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
   }
 
   @Test
+  @Ignore("Deprecated functionality")
   public void testFailedEntries() {
     cleanUpId = "x-failing";
     given().
@@ -194,6 +195,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
   }
 
   @Test
+  @Ignore("Deprecated functionality")
   public void testErrorAndFailed() {
     cleanUpId = "x-failing";
     given().
@@ -221,6 +223,7 @@ public class ErrorResponseTestIT extends TestSpaceWithFeature {
   }
 
   @Test
+  @Ignore("Deprecated functionality")
   public void testsExceptionPreProcessor() {
     cleanUpId = "x-failing";
     given().

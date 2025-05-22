@@ -1,0 +1,214 @@
+---
+values:
+  patch-features-description: Create or patch features.
+  get-tile-description: List the features selected by tile type and tile id.
+recipes:
+  - name: base
+    replace:
+      - type: value
+        path: info.version
+        replace: ${VERSION}
+  - name: no-e-ne-cr-params
+    exclude:
+      - paths.'/spaces/{spaceId}/features'.post.parameters.$ref~=^.*IfExists$
+      - paths.'/spaces/{spaceId}/features'.post.parameters.$ref~=^.*IfNotExists$
+      - paths.'/spaces/{spaceId}/features'.post.parameters.$ref~=^.*ConflictResolution$
+      - components.parameters.IfExists
+      - components.parameters.IfNotExists
+      - components.parameters.ConflictResolution
+    replace:
+      - type: value
+        path: paths.'/spaces/{spaceId}/features'.post.description
+        replace: ${patch-features-description}
+  - name: no-extension
+    exclude:
+      - paths.'/spaces/{spaceId}/features'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/features'.post.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/features'.delete.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/features/{featureId}'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/features/{featureId}'.delete.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/statistics'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/bbox'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/tile/{type}/{tileId}'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/spatial'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/spatial'.post.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/search'.get.parameters.$ref~=^.*Context$
+      - paths.'/spaces/{spaceId}/iterate'.get.parameters.$ref~=^.*Context$
+      - components.parameters.Context
+      - components.schemas.Extension
+      - components.schemas.Space.properties.extends
+  - name: stable
+    extends: base,no-e-ne-cr-params,no-extension
+    exclude:
+      - tags.name=Manage Tags
+      - tags.name=Manage Connectors
+      - tags.name=Manage Subscriptions
+      - tags.name=Manage Jobs
+      - paths.'/spaces/{spaceId}/tags'
+      - paths.'/spaces/{spaceId}/tags/{tagId}'
+      - paths.'/spaces/{spaceId}/changesets/statistics'
+      - paths.'/spaces'.get.parameters.name=includeConnectors
+      - paths.'/spaces'.get.parameters.name=contentUpdatedAt
+      - paths.'/spaces/{spaceId}/features'.post.parameters.$ref~=^.*Transactional$
+      - paths.'/spaces/{spaceId}/features'.post.parameters.$ref~=^.*PrefixId$
+      - paths.'/spaces/{spaceId}/bbox'.get.parameters.$ref~=^.*Tweaks$
+      - paths.'/spaces/{spaceId}/bbox'.get.parameters.$ref~=^.*TweaksParams$
+      - paths.'/spaces/{spaceId}/tile/{type}/{tileId}'.get.parameters.$ref~=^.*Tweaks$
+      - paths.'/spaces/{spaceId}/tile/{type}/{tileId}'.get.parameters.$ref~=^.*TweaksParams$
+      - paths.'/spaces/{spaceId}/iterate'.get.parameters.$ref~=^.*Version$
+      - paths.'/spaces/{spaceId}/iterate'.get.parameters.$ref~=^.*Sort$
+      - paths.'/spaces/{spaceId}/iterate'.get.parameters.$ref~=^.*Part$
+      - paths.'/spaces/{spaceId}/subscriptions'
+      - paths.'/spaces/{spaceId}/subscriptions/{subscriptionId}'
+      - paths.'/spaces/{spaceId}/jobs'
+      - paths.'/spaces/{spaceId}/job/{jobId}'
+      - paths.'/spaces/{spaceId}/job/{jobId}/execute'
+      - paths.'/connectors'
+      - paths.'/connectors/{connectorId}'
+      - components.parameters.ConnectorId
+      - components.parameters.EndVersionNotRequired
+      - components.parameters.IncludeSystemTags
+      - components.parameters.PrefixId
+      - components.parameters.StartVersionNotRequired
+      - components.parameters.SubscriptionId
+      - components.parameters.TagId
+      - components.parameters.Transactional
+      - components.parameters.Tweaks
+      - components.parameters.TweaksParams
+      - components.responses.ConnectorResponse
+      - components.responses.ConnectorsResponse
+      - components.responses.JobResponse
+      - components.responses.JobsResponse
+      - components.responses.SubscriptionResponse
+      - components.responses.SubscriptionsResponse
+      - components.responses.TagResponse
+      - components.responses.TagsResponse
+      - components.requestBodies.ConnectorConfig
+      - components.requestBodies.SubscriptionRequest
+      - components.schemas.AWSLambda
+      - components.schemas.CacheProfile
+      - components.schemas.ConnectorConfig
+      - components.schemas.Http
+      - components.schemas.RemoteFunctionConfig
+      - components.schemas.Space.properties.tags
+      - components.schemas.Space.properties.cacheTTL
+      - components.schemas.Space.properties.volatilityAtLastContentUpdate
+      - components.schemas.Space.properties.volatility
+      - components.schemas.Space.properties.autoCacheProfile
+      - components.schemas.Space.properties.listeners
+      - components.schemas.Space.properties.processors
+      - components.schemas.Space.properties.storage
+      - components.schemas.Space.properties.client
+      - components.schemas.SpaceStorage
+      - components.schemas.SpaceStorageParams
+      - components.schemas.StorageCapabilities
+      - components.schemas.Tag
+      - components.schemas.Connector
+      - components.schemas.Subscription
+      - components.schemas.SubscriptionConfig
+      - components.schemas.Job
+    replace:
+      - type: value
+        path: paths.'/spaces/{spaceId}/tile/{type}/{tileId}'.get.description
+        replace: ${get-tile-description}
+  - name: experimental
+    extends: base,no-e-ne-cr-params,no-extension
+    replace:
+      - type: value
+        path: servers.0.url
+        replace: /hub
+  - name: contract
+    extends: base
+    include:
+      - path: paths.'/spaces'.post
+        value:
+          parameters:
+            - name: connectorMapping
+              in: query
+              description: >-
+                The strategy used to assign the connector to the space.
+                When not set, uses the default strategy, which is random.
+              required: false
+              schema:
+                type: string
+                enum:
+                  - SpaceStorageMatchingMap
+    replace:
+      - type: value
+        path: servers.0.url
+        replace: http://localhost:8080/
+      - type: key
+        path: paths.'/spaces'
+        replace: paths.'/hub/spaces'
+      - type: key
+        path: paths.'/spaces/{spaceId}'
+        replace: paths.'/hub/spaces/{spaceId}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/features'
+        replace: paths.'/hub/spaces/{spaceId}/features'
+      - type: key
+        path: paths.'/spaces/{spaceId}/features/{featureId}'
+        replace: paths.'/hub/spaces/{spaceId}/features/{featureId}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/statistics'
+        replace: paths.'/hub/spaces/{spaceId}/statistics'
+      - type: key
+        path: paths.'/spaces/{spaceId}/bbox'
+        replace: paths.'/hub/spaces/{spaceId}/bbox'
+      - type: key
+        path: paths.'/spaces/{spaceId}/tile/{type}/{tileId}'
+        replace: paths.'/hub/spaces/{spaceId}/tile/{type}/{tileId}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/spatial'
+        replace: paths.'/hub/spaces/{spaceId}/spatial'
+      - type: key
+        path: paths.'/spaces/{spaceId}/search'
+        replace: paths.'/hub/spaces/{spaceId}/search'
+      - type: key
+        path: paths.'/spaces/{spaceId}/iterate'
+        replace: paths.'/hub/spaces/{spaceId}/iterate'
+      - type: key
+        path: paths.'/connectors'
+        replace: paths.'/hub/connectors'
+      - type: key
+        path: paths.'/connectors/{connectorId}'
+        replace: paths.'/hub/connectors/{connectorId}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/subscriptions'
+        replace: paths.'/hub/spaces/{spaceId}/subscriptions'
+      - type: key
+        path: paths.'/spaces/{spaceId}/subscriptions/{subscriptionId}'
+        replace: paths.'/hub/spaces/{spaceId}/subscriptions/{subscriptionId}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/changesets'
+        replace: paths.'/hub/spaces/{spaceId}/changesets'
+      - type: key
+        path: paths.'/spaces/{spaceId}/changesets/statistics'
+        replace: paths.'/hub/spaces/{spaceId}/changesets/statistics'
+      - type: key
+        path: paths.'/spaces/{spaceId}/changesets/{version}'
+        replace: paths.'/hub/spaces/{spaceId}/changesets/{version}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/jobs'
+        replace: paths.'/hub/spaces/{spaceId}/jobs'
+      - type: key
+        path: paths.'/spaces/{spaceId}/job/{jobId}'
+        replace: paths.'/hub/spaces/{spaceId}/job/{jobId}'
+      - type: key
+        path: paths.'/spaces/{spaceId}/job/{jobId}/execute'
+        replace: paths.'/hub/spaces/{spaceId}/job/{jobId}/execute'
+      - type: key
+        path: paths.'/spaces/{spaceId}/tags'
+        replace: paths.'/hub/spaces/{spaceId}/tags'
+      - type: key
+        path: paths.'/spaces/{spaceId}/tags/{tagId}'
+        replace: paths.'/hub/spaces/{spaceId}/tags/{tagId}'
+      - type: value
+        path: components.parameters.EndVersion.required
+        replace: false
+      - type: value
+        path: components.parameters.StartVersion.required
+        replace: false
+      - type: value
+        path: components.parameters.VersionLowerThan.required
+        replace: false

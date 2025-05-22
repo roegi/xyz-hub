@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,32 +20,27 @@
 package com.here.xyz.hub.task;
 
 
-import static com.here.xyz.hub.task.ModifyOp.IfExists.DELETE;
-import static com.here.xyz.hub.task.ModifyOp.IfExists.MERGE;
-import static com.here.xyz.hub.task.ModifyOp.IfExists.PATCH;
-import static com.here.xyz.hub.task.ModifyOp.IfExists.REPLACE;
-import static com.here.xyz.hub.task.ModifyOp.IfExists.RETAIN;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 
 import com.google.common.base.Strings;
 import com.here.xyz.events.Event;
+import com.here.xyz.events.PropertiesQuery;
+import com.here.xyz.hub.auth.Authorization;
 import com.here.xyz.hub.auth.SpaceAuthorization;
 import com.here.xyz.hub.config.SpaceConfigClient.SpaceAuthorizationCondition;
 import com.here.xyz.hub.config.SpaceConfigClient.SpaceSelectionCondition;
 import com.here.xyz.hub.connectors.models.Space;
-import com.here.xyz.hub.rest.Api;
 import com.here.xyz.hub.rest.ApiResponseType;
-import com.here.xyz.hub.rest.HttpException;
-import com.here.xyz.hub.task.ModifyOp.IfExists;
 import com.here.xyz.hub.task.TaskPipeline.Callback;
+import com.here.xyz.util.service.BaseHttpServerVerticle;
+import com.here.xyz.util.service.HttpException;
 import io.vertx.ext.web.RoutingContext;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public abstract class SpaceTask<X extends SpaceTask<?>> extends Task<Event, X> {
-
-  public static final String DEFAULT_STORAGE_ID = "psql";
 
   public View view = View.BASIC;
 
@@ -55,6 +50,12 @@ public abstract class SpaceTask<X extends SpaceTask<?>> extends Task<Event, X> {
   public List<Space> responseSpaces;
   public boolean canReadAdminProperties = false;
   public boolean canReadConnectorsProperties = false;
+
+  /**
+   * If the space root space of this task is a composite-space, this field will contain the resolved extension-map.
+   * "Resolved" means it contains the full extended layer-stack. For a 2-level extension that means it would contain two levels of spaces.
+   */
+  Map<String, Object> resolvedExtensions;
 
   public SpaceTask(RoutingContext context, ApiResponseType responseType) {
     super(new SpaceEvent(), context, responseType, true);
@@ -77,6 +78,7 @@ public abstract class SpaceTask<X extends SpaceTask<?>> extends Task<Event, X> {
 
     public SpaceAuthorizationCondition authorizedCondition;
     public SpaceSelectionCondition selectedCondition;
+    public PropertiesQuery propertiesQuery;
 
     public ReadQuery(RoutingContext context, ApiResponseType returnType, List<String> spaceIds, List<String> ownerIds) {
       super(context, returnType);
@@ -101,11 +103,24 @@ public abstract class SpaceTask<X extends SpaceTask<?>> extends Task<Event, X> {
     public static final String OTHERS = "others";
     public static final String ALL = "*";
 
-    public MatrixReadQuery(RoutingContext context, ApiResponseType returnType, boolean includeRights, boolean includeConnectors, String owner) {
+    public MatrixReadQuery(RoutingContext context, String id) {
+      this(context, ApiResponseType.SPACE, false, false, null, null, null, null, Collections.singleton(id));
+    }
+
+    public MatrixReadQuery(RoutingContext context, ApiResponseType returnType, boolean includeRights, boolean includeConnectors, String owner, PropertiesQuery propsQuery, String tagId, String region) {
+      this(context, returnType, includeRights, includeConnectors, owner, propsQuery, tagId, region, null);
+    }
+
+    public MatrixReadQuery(RoutingContext context, ApiResponseType returnType, boolean includeRights, boolean includeConnectors, String owner, PropertiesQuery propsQuery, String tagId, String region, Set<String> ids) {
       super(context, returnType, null, null);
+
+      selectedCondition = new SpaceSelectionCondition();
+      selectedCondition.spaceIds = ids;
+      selectedCondition.tagId = tagId;
+      selectedCondition.region = region;
+
       if (!Strings.isNullOrEmpty(owner)) {
-        selectedCondition = new SpaceSelectionCondition();
-        String ownOwnerId = Api.Context.getJWT(context).aid;
+        String ownOwnerId = BaseHttpServerVerticle.getJWT(context).aid;
         switch (owner) {
           case ME:
             selectedCondition.ownerIds = Collections.singleton(ownOwnerId);
@@ -129,21 +144,25 @@ public abstract class SpaceTask<X extends SpaceTask<?>> extends Task<Event, X> {
       }
 
       this.canReadConnectorsProperties = includeConnectors;
+      if (propsQuery != null) {
+        propertiesQuery = propsQuery;
+      }
     }
 
     @Override
-    public TaskPipeline getPipeline() {
+    public TaskPipeline createPipeline() {
       return TaskPipeline.create(this)
-          .then(SpaceAuthorization::authorizeReadSpaces)
+          .then(Authorization::authorizeComposite)
           .then(SpaceTaskHandler::readFromJWT)
           .then(SpaceTaskHandler::readSpaces)
+          .then(SpaceTaskHandler::checkSpaceExists)
+          .then(SpaceAuthorization::authorizeReadSpaces)
           .then(SpaceTaskHandler::convertResponse);
     }
   }
 
   public static class ConditionalOperation extends SpaceTask<ConditionalOperation> {
 
-    private static final List<IfExists> UPDATE_OPS = Arrays.asList(PATCH, MERGE, REPLACE);
     public final boolean requireResourceExists;
     public ModifySpaceOp modifyOp;
     public Space template;
@@ -157,61 +176,73 @@ public abstract class SpaceTask<X extends SpaceTask<?>> extends Task<Event, X> {
     private void verifyResourceExists(ConditionalOperation task, Callback<ConditionalOperation> callback) {
       if (task.requireResourceExists && task.modifyOp.entries.get(0).head == null) {
         callback.exception(new HttpException(NOT_FOUND, "The requested resource does not exist."));
-      } else {
-        callback.call(task);
+        return;
       }
+
+      callback.call(task);
     }
 
     public boolean isRead() {
-      try {
-        return modifyOp.entries.get(0).head != null && modifyOp.ifExists.equals(RETAIN);
-      } catch (NullPointerException e) {
-        return false;
-      }
+      return modifyOp.isRead();
     }
 
     public boolean isCreate() {
-      try {
-        return modifyOp.entries.get(0).head == null && modifyOp.entries.get(0).result != null;
-      } catch (NullPointerException e) {
-        return false;
-      }
+      return modifyOp.isCreate();
     }
 
     public boolean isDelete() {
-      try {
-        return modifyOp.entries.get(0).head != null && modifyOp.ifExists.equals(DELETE);
-      } catch (NullPointerException e) {
-        return false;
-      }
+      return modifyOp.isDelete();
     }
 
     public boolean isUpdate() {
-      try {
-        return modifyOp.entries.get(0).head != null && UPDATE_OPS.contains(modifyOp.ifExists);
-      } catch (NullPointerException e) {
-        return false;
-      }
+      return modifyOp.isUpdate();
     }
 
     @Override
-    public TaskPipeline<ConditionalOperation> getPipeline() {
+    public TaskPipeline<ConditionalOperation> createPipeline() {
       return TaskPipeline.create(this)
           .then(SpaceTaskHandler::loadSpace)
           .then(SpaceTaskHandler::preprocess)
           .then(this::verifyResourceExists)
           .then(SpaceTaskHandler::processModifyOp)
+          .then(SpaceTaskHandler::postProcess)
+          .then(SpaceTaskHandler::handleReadOnlyUpdate)
+          .then(SpaceTaskHandler::validate)
+          .then(SpaceTaskHandler::resolveExtensions)
+          .then(Authorization::authorizeComposite)
           .then(SpaceAuthorization::authorizeModifyOp)
           .then(SpaceTaskHandler::enforceUsageQuotas)
-          .then(SpaceTaskHandler::validate)
-          .then(SpaceTaskHandler::timestamp)
           .then(SpaceTaskHandler::sendEvents)
           .then(SpaceTaskHandler::modifySpaces)
+          .then(SpaceTaskHandler::resolveDependencies)
           .then(SpaceTaskHandler::convertResponse);
     }
   }
 
   public static class SpaceEvent extends Event<SpaceEvent> {
 
+  }
+
+  public enum ConnectorMapping {
+    RANDOM,
+    SPACESTORAGEMATCHINGMAP;
+
+    public static ConnectorMapping of(String value) {
+      if (value == null) {
+        return null;
+      }
+      try {
+        return valueOf(value.toUpperCase());
+      } catch (IllegalArgumentException e) {
+        return null;
+      }
+    }
+
+    public static ConnectorMapping of(String value, ConnectorMapping defaultValue) {
+      ConnectorMapping result = of(value);
+      if (result == null)
+        return defaultValue;
+      return result;
+    }
   }
 }

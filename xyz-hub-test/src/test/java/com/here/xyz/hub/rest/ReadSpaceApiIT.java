@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,15 +19,23 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_GEO_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
-import static org.hamcrest.Matchers.*;
+import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.empty;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.hamcrest.Matchers.hasItems;
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
-import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
 import org.junit.After;
@@ -42,10 +50,26 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   private static final String OTHER = "other";
   private static Set<String> cleanUpIds = new HashSet<>();
 
+  private static boolean zeroSpaces = false;
+
+  private static boolean zeroSpaces()
+  {
+    int nrCurrentSpaces =
+     given()
+      .contentType(APPLICATION_JSON).accept(APPLICATION_JSON).headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+       .when()
+        .get("/spaces?owner=*")
+      .then()
+       .statusCode(OK.code())
+       .extract().path("$.size()");
+
+    return nrCurrentSpaces == 0;
+  }
 
   @BeforeClass
   public static void setupClass() {
     remove();
+    zeroSpaces = zeroSpaces();
   }
 
   @Before
@@ -82,19 +106,6 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces/x-psql-test")
         .then()
         .statusCode(FORBIDDEN.code());
-  }
-
-  //FIXME: Remove that test (and the added workaround response type application/geo+json in the openapi_src.yaml) once CMEKB-2572 has been fixed (see: CMEKB-2637)
-  @Test
-  public void readSpaceWithGeoJsonWorkaround() {
-    given()
-        .accept(APPLICATION_GEO_JSON)
-        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
-        .when()
-        .get("/spaces/x-psql-test")
-        .then()
-        .statusCode(OK.code())
-        .body("id", equalTo("x-psql-test"));
   }
 
   @Test
@@ -156,7 +167,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void readSpacesOwner2NoAccess() throws Exception {
+  public void readSpacesOwner2NoAccess() {
     cleanUpIds.add(given()
         .contentType(APPLICATION_JSON)
         .accept(APPLICATION_JSON)
@@ -234,9 +245,10 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=*&includeConnectors=true")
         .then()
         .statusCode(OK.code())
-        .body("size()", is(1))
-        .body("[0].title", equalTo("My Demo Space"))
-        .body("[0].storage.id", equalTo("psql"));
+        .body("size()",  zeroSpaces ? is(1) : greaterThanOrEqualTo(1))
+        .body("findAll { it.id == 'x-psql-test' }", not(empty()))
+        .body("find { it.id == 'x-psql-test' }.title", equalTo("My Demo Space"))
+        .body("find { it.id == 'x-psql-test' }.storage.id", equalTo("psql"));
   }
 
   @Test
@@ -376,7 +388,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=*")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(3))
+        .body("size()", zeroSpaces ? is(3) : greaterThanOrEqualTo(3))
         .body("title", hasItems(MY_DEMO_SPACE, SHARED, OTHER));
 
     given()
@@ -386,7 +398,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=*")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(3))
+        .body("size()", zeroSpaces ? is(3) : greaterThanOrEqualTo(3))
         .body("title", hasItems(MY_DEMO_SPACE, SHARED, OTHER));
 
     given()
@@ -396,7 +408,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=*")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(3))
+        .body("size()", zeroSpaces ? is(3) : greaterThanOrEqualTo(3))
         .body("title", hasItems(MY_DEMO_SPACE, SHARED, OTHER));
 
     given()
@@ -406,7 +418,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=*")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(3))
+        .body("size()", zeroSpaces ? is(3) : greaterThanOrEqualTo(3))
         .body("title", hasItems(MY_DEMO_SPACE, SHARED, OTHER));
 
     given()
@@ -426,7 +438,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=*")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(3))
+        .body("size()", zeroSpaces ? is(3) : greaterThanOrEqualTo(3))
         .body("title", hasItems(MY_DEMO_SPACE, SHARED, OTHER));
   }
 
@@ -546,7 +558,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=others")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(2))
+        .body("size()", zeroSpaces ? is(2) : greaterThanOrEqualTo(2))
         .body("title", hasItems(SHARED, OTHER));
 
     given()
@@ -556,7 +568,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=others")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(2))
+        .body("size()", zeroSpaces ? is(2) : greaterThanOrEqualTo(2))
         .body("title", hasItems(SHARED, OTHER));
 
     given()
@@ -566,7 +578,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=others")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(2))
+        .body("size()", zeroSpaces ? is(2) : greaterThanOrEqualTo(2))
         .body("title", hasItems(SHARED, OTHER));
 
     given()
@@ -576,7 +588,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=others")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(1))
+        .body("size()", zeroSpaces ? is(1) : greaterThanOrEqualTo(1))
         .body("title", hasItems(MY_DEMO_SPACE));
 
     given()
@@ -596,7 +608,7 @@ public class ReadSpaceApiIT extends TestSpaceWithFeature {
         .get("/spaces?owner=others")
         .then()
         .statusCode(OK.code())
-        .body("$", hasSize(2))
+        .body("size()", zeroSpaces ? is(2) : greaterThanOrEqualTo(2))
         .body("title", hasItems(SHARED, OTHER));
   }
 }

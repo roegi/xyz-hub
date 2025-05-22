@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,25 +20,27 @@
 package com.here.xyz.hub.connectors;
 
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
-import com.here.xyz.connectors.AbstractConnectorHandler;
-import com.here.xyz.connectors.SimulatedContext;
 import com.here.xyz.hub.connectors.models.Connector;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig;
+import com.here.xyz.util.service.Core;
+import com.here.xyz.util.service.aws.SimulatedContext;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import org.slf4j.Marker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
 
-public class EmbeddedFunctionClient extends QueueingRemoteFunctionClient implements Logging {
+public class EmbeddedFunctionClient extends RemoteFunctionClient {
 
+  private static final Logger logger = LogManager.getLogger();
   /**
    * The thread pool being used for running calls to embedded connectors asynchronously.
    */
@@ -46,46 +48,72 @@ public class EmbeddedFunctionClient extends QueueingRemoteFunctionClient impleme
 
   EmbeddedFunctionClient(Connector connectorConfig) {
     super(connectorConfig);
-    if (!(connectorConfig.remoteFunction instanceof Connector.RemoteFunctionConfig.Embedded)) {
-      throw new IllegalArgumentException("Invalid remoteFunctionConfig argument, must be an instance of Embedded");
-    }
-
-    int maxConnections = connectorConfig.getMaxConnectionsPerInstance();
-    embeddedExecutor = new ThreadPoolExecutor(8, maxConnections, 10, TimeUnit.MINUTES,
-        new SynchronousQueue<>());
   }
 
-  protected void invoke(Marker marker, byte[] bytes, Handler<AsyncResult<byte[]>> callback) {
-    logger().info(marker, "Invoke embedded lambda '{}' for event: {}", connectorConfig.remoteFunction.id,
-        new String(bytes, StandardCharsets.UTF_8));
+  @Override
+  synchronized protected void setConnectorConfig(final Connector newConnectorConfig) throws NullPointerException, IllegalArgumentException {
+    super.setConnectorConfig(newConnectorConfig);
+    shutdown(embeddedExecutor);
+    createExecutorService(newConnectorConfig.id);
+  }
+
+  private void createExecutorService(String connectorId) {
+    if (!(getConnectorConfig().getRemoteFunction() instanceof RemoteFunctionConfig.Embedded)) {
+      throw new IllegalArgumentException("Invalid remoteFunctionConfig argument, must be an instance of Embedded");
+    }
+    int maxConnections = getMaxConnections();
+    embeddedExecutor = new ThreadPoolExecutor(8, maxConnections, 10, TimeUnit.MINUTES,
+        new SynchronousQueue<>(), Core.newThreadFactory("embeddedRfc-" + connectorId));
+  }
+
+  @Override
+  void destroy() {
+    super.destroy();
+    shutdown(embeddedExecutor);
+  }
+
+  private static void shutdown(ExecutorService execService) {
+    if (execService == null) return;
+    //Shutdown the executor service after the request timeout
+    //TODO: Use CompletableFuture.delayedExecutor() after switching to Java 9
+    new Thread(() -> {
+      try {
+        Thread.sleep(MAX_REQUEST_TIMEOUT);
+      }
+      catch (InterruptedException ignored) {}
+      execService.shutdownNow();
+    }).start();
+  }
+
+  @Override
+  protected void invoke(FunctionCall fc, Handler<AsyncResult<byte[]>> callback) {
+    final RemoteFunctionConfig remoteFunction = getConnectorConfig().getRemoteFunction();
+    logger.info(fc.marker, "Invoke embedded lambda '{}' for event: {}", remoteFunction.id, new String(fc.bytes));
     embeddedExecutor.execute(() -> {
       String className = null;
       try {
-        className = ((Connector.RemoteFunctionConfig.Embedded) connectorConfig.remoteFunction).className;
+        className = ((Connector.RemoteFunctionConfig.Embedded) remoteFunction).className;
         final Class<?> mainClass = Class.forName(className);
         final RequestStreamHandler reqHandler = (RequestStreamHandler) mainClass.newInstance();
-        if (reqHandler instanceof AbstractConnectorHandler) {
-          ((AbstractConnectorHandler) reqHandler).setEmbedded(true);
-        }
         final ByteArrayOutputStream output = new ByteArrayOutputStream();
-        reqHandler.handleRequest(new ByteArrayInputStream(bytes), output,
-            new EmbeddedContext(marker, connectorConfig.remoteFunction.id,
-                ((Connector.RemoteFunctionConfig.Embedded) connectorConfig.remoteFunction).env));
-        logger().info(marker, "Handling response of embedded lambda call to '{}'.", connectorConfig.remoteFunction.id);
+        reqHandler.handleRequest(new ByteArrayInputStream(fc.bytes), output,
+            new EmbeddedContext(fc.marker, remoteFunction.id,
+                ((Connector.RemoteFunctionConfig.Embedded) remoteFunction).env));
+        logger.info(fc.marker, "Handling response of embedded lambda call to '{}'.", remoteFunction.id);
         byte[] responseBytes = output.toByteArray();
-        checkResponseSize(responseBytes);
-        callback.handle(Future.succeededFuture(getDecompressed(responseBytes)));
-      } catch (ClassNotFoundException e) {
-        logger().error(marker, "Configuration error, the specified class '{}' was not found {}", className, e);
+        callback.handle(Future.succeededFuture(responseBytes));
+      }
+      catch (ClassNotFoundException e) {
+        logger.error(fc.marker, "Configuration error, the specified class '{}' was not found {}", className, e);
         callback.handle(Future.failedFuture(e));
-      } catch (NoClassDefFoundError e) {
-        logger().error(marker, "Configuration error, the specified class '{}' is referring to '{}' which does not exist", className,
+      }
+      catch (NoClassDefFoundError e) {
+        logger.error(fc.marker, "Configuration error, the specified class '{}' is referring to '{}' which does not exist", className,
             e.getMessage());
         callback.handle(Future.failedFuture(e));
-      } catch (Throwable e) {
-        logger()
-            .error(marker, "Exception occurred, while trying to execute embedded lambda with id '{}' {}", connectorConfig.remoteFunction.id,
-                e);
+      }
+      catch (Throwable e) {
+        logger.error(fc.marker, "Exception occurred, while trying to execute embedded lambda with id '{}' {}", remoteFunction.id, e);
         callback.handle(Future.failedFuture(e));
       }
     });
@@ -94,23 +122,24 @@ public class EmbeddedFunctionClient extends QueueingRemoteFunctionClient impleme
   /**
    * Context used by embedded lambda connectors.
    */
-  private static class EmbeddedContext extends SimulatedContext implements Logging {
+  public static class EmbeddedContext extends SimulatedContext {
 
+    private static final Logger logger = LogManager.getLogger();
     private final Marker marker;
 
-    public EmbeddedContext(Marker marker, String functionName, Map<String, String> environmentVariables) {
-      super(functionName, environmentVariables);
+    public EmbeddedContext(Marker marker, String functionName, Map<String, String> environmentVariableOverrides) {
+      super(functionName, environmentVariableOverrides);
       this.marker = marker;
     }
 
     @Override
     public void log(String string) {
-      logger().info(marker, string);
+      logger.info(marker, string);
     }
 
     @Override
     public void log(byte[] bytes) {
-      logger().info(marker, "bytes: {}", bytes);
+      logger.info(marker, "bytes: {}", bytes);
     }
   }
 }

@@ -2,8 +2,9 @@
 ---
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Run XYZ Hub tests](https://github.com/heremaps/xyz-hub/workflows/Run%20XYZ%20Hub%20tests/badge.svg)](https://github.com/heremaps/xyz-hub/actions?query=workflow%3A%22Run+XYZ+Hub+tests%22)
 
-XYZ Hub is a RESTful web service for the access and management of geospatial data. 
+XYZ Hub is a RESTful web service for the access and management of geospatial data.
 
 # Overview
 Some of the features of XYZ Hub are:
@@ -18,27 +19,23 @@ Some of the features of XYZ Hub are:
 * Build a real-time geodata pipeline with processors
 * Attach listeners to react on events
 
-You can find more information in the [XYZ Documentation](https://www.here.xyz/api) and in the [OpenAPI specification](https://xyz.api.here.com/hub/static/redoc/index.html).
-
 XYZ Hub uses [GeoJSON](https://tools.ietf.org/html/rfc79460) as the main geospatial data exchange format. Tiled data can also be provided as [MVT](https://github.com/mapbox/vector-tile-spec/blob/master/2.1/README.md).
 
 # Prerequisites
 
- * Java 8+
- * Maven 3.6+
- * Postgres 9.6+ with PostGIS 2.5+
- * Redis 5+ (optional)
- * Amazon DynamoDB (optional)
+ * Java 17
+ * Maven 3.9+
+ * Postgres 15+ with PostGIS 3+
+ * Redis 7+ (optional)
  * Docker 18+ (optional)
- * Docker Compose 1.24+  (optional)
-
-*Hint: Postgres with PostGIS will be automatically started if you use 'docker-compose up -d' to start the service.*
+ * Docker Compose 1.24+ (optional)
 
 # Getting started
 Clone and install the project using:
 
 ```bash
 git clone https://github.com/heremaps/xyz-hub.git
+cd xyz-hub
 mvn clean install
 ```
 
@@ -53,6 +50,8 @@ Alternatively, you can start freshly from the sources by using this command afte
 ```bash
 mvn clean install -Pdocker
 ```
+
+*Hint: Postgres with PostGIS will be automatically started if you use 'docker-compose up -d' to start the service.*
 
 ### Without docker
 
@@ -140,6 +139,12 @@ The service will respond with the inserted geo features:
 }
 ```
 
+### OpenAPI specification
+
+The OpenAPI specification files are accessible under the following URIs:
+* Stable: `http://<host>:<port>/hub/static/openapi/stable.yaml`
+* Experimental: `http://<host>:<port>/hub/static/openapi/experimental.yaml`
+
 # Acknowledgements
 
 XYZ Hub uses:
@@ -156,8 +161,6 @@ and [others](./pom.xml#L177-L479).
 Your contributions are always welcome! Please have a look at the [contribution guidelines](CONTRIBUTING.md) first.
 
 # License
+Copyright (C) 2017-2024 HERE Europe B.V.
 
-
-Copyright (C) 2017-2019 HERE Europe B.V.
-
-See the [LICENSE](./LICENSE) file in the root of this project for license details.
+This project is licensed under the Apache License, Version 2.0 - see the [LICENSE](./LICENSE) file for details.

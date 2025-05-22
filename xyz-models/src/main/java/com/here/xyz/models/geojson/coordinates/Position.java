@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,8 +41,6 @@ public class Position extends ArrayList<Double> implements IBoundedCoordinates {
 
   public Position(double longitude, double latitude, double altitude) {
     this(longitude, latitude);
-    this.add(LONGITUDE, longitude);
-    this.add(LATITUDE, latitude);
     this.add(ALTITUDE, altitude);
   }
 
@@ -128,5 +126,22 @@ public class Position extends ArrayList<Double> implements IBoundedCoordinates {
       return new BBox(lon, lat, lon, lat);
     }
     return null;
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (this == o) return true;
+    if (!(o instanceof Position other))
+      return false;
+
+    if (this.size() != other.size())
+      return false;
+
+    for (int i = 0; i < this.size(); i++) {
+      if (!this.get(i).equals(other.get(i))) {
+        return false;
+      }
+    }
+    return true;
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,22 +19,26 @@
 
 package com.here.xyz.hub.auth;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_GEO_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
-import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.NO_CONTENT;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.core.CombinableMatcher.either;
 
 import com.here.xyz.hub.rest.RestAssuredTest;
-import com.here.xyz.hub.util.Compression;
-import com.jayway.restassured.response.ValidatableResponse;
+import com.here.xyz.models.geojson.implementation.Feature;
+import com.here.xyz.models.geojson.implementation.FeatureCollection;
+import com.here.xyz.models.geojson.implementation.Properties;
+import com.here.xyz.util.Compression;
+import io.restassured.response.ValidatableResponse;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.zip.DataFormatException;
 import org.junit.After;
@@ -44,9 +48,16 @@ import org.junit.Test;
 public class AuthTestsIT extends RestAssuredTest {
 
   private static String cleanUpId;
+  private static boolean zeroSpaces = true;
 
   @BeforeClass
   public static void setupClass() {
+    removeAllSpaces();
+    zeroSpaces = zeroSpaces();
+  }
+
+  @After
+  public void tearDown() {
     removeAllSpaces();
   }
 
@@ -63,11 +74,22 @@ public class AuthTestsIT extends RestAssuredTest {
     removeSpace("x-auth-test-space");
     removeSpace("x-auth-test-space-shared");
 
-    if (cleanUpId != null) {
-      removeSpace(cleanUpId);
-    }
+    if (cleanUpId != null
+        && !"x-auth-test-space".equals(cleanUpId)
+        && !"x-auth-test-space-shared".equals(cleanUpId)
+    ) removeSpace(cleanUpId);
   }
 
+  private static boolean zeroSpaces() {
+    int nrCurrentSpaces =
+     getSpacesList("*", AuthProfile.ACCESS_ALL)
+      .statusCode(OK.code())
+       .extract().path("$.size()");
+
+    return nrCurrentSpaces == 0;
+  }
+
+  @SuppressWarnings("SameParameterValue")
   private static ValidatableResponse createSpaceWithFeatures(String spaceFile, String featuresFile, AuthProfile profile) {
     cleanUpId = createSpace(spaceFile, profile)
         .statusCode(OK.code()).extract().path("id");
@@ -121,6 +143,7 @@ public class AuthTestsIT extends RestAssuredTest {
         .then();
   }
 
+  @SuppressWarnings("SameParameterValue")
   private static ValidatableResponse updateSpaceStorage(String storageId, AuthProfile profile) {
     return given()
         .contentType(APPLICATION_JSON)
@@ -139,27 +162,21 @@ public class AuthTestsIT extends RestAssuredTest {
         .headers(getAuthHeaders(profile))
         .when()
         .get("/spaces" + (owner != null ? "?owner=" + owner : ""))
-        .prettyPeek()
         .then();
   }
 
-  private static ValidatableResponse testSpaceListWithShared(String owner, AuthProfile profile) {
+  private static ValidatableResponse testSpaceListWithShared(String owner, AuthProfile readProfile) {
     createSpace("/xyz/hub/auth/createSharedSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN)
         .statusCode(OK.code());
 
     createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.ACCESS_OWNER_2)
         .statusCode(OK.code());
 
-    return getSpacesList(owner, profile);
+    return getSpacesList(owner, readProfile);
   }
 
   private static ValidatableResponse testSpaceListWithShared(String owner) {
     return testSpaceListWithShared(owner, AuthProfile.ACCESS_OWNER_2);
-  }
-
-  @After
-  public void tearDown() {
-    removeAllSpaces();
   }
 
   @Test
@@ -193,6 +210,25 @@ public class AuthTestsIT extends RestAssuredTest {
         .statusCode(FORBIDDEN.code());
   }
 
+  @Test
+  public void createSpaceWithCustomIdNegative1() {
+    createSpace("/xyz/hub/auth/createDefaultSpace.json", AuthProfile.ACCESS_OWNER_3)
+        .statusCode(FORBIDDEN.code());
+  }
+
+  @Test
+  public void createSpaceWithCustomIdNegative2() {
+    createSpace("/xyz/hub/auth/createCustomIdSpace.json", AuthProfile.ACCESS_OWNER_3)
+        .statusCode(FORBIDDEN.code());
+  }
+
+  @Test
+  public void createSpaceWithCustomIdPositive() {
+    cleanUpId = createSpace("/xyz/hub/auth/createCustomIdSpace.json", AuthProfile.ACCESS_OWNER_3_WITH_CUSTOM_SPACE_IDS)
+        .statusCode(OK.code())
+        .extract()
+        .path("id");
+  }
   @Test
   public void createTestStorageSpaceNegative() {
     createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_PSQL_ONLY)
@@ -233,9 +269,80 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
+  public void createSpaceStorageOwnerAndConnectorId() {
+    // Owner matches, ID does not
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_C3_OWNER_AND_ID)
+            .statusCode(FORBIDDEN.code());
+    // Owner does not match, ID does
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_C2_OTHER_OWNER_AND_ID)
+            .statusCode(FORBIDDEN.code());
+    // Owner and ID do not match
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC3.json", AuthProfile.STORAGE_AUTH_TEST_C3_OTHER_OWNER_AND_ID)
+            .statusCode(FORBIDDEN.code());
+    // Owner and ID matches
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_C2_OWNER_AND_ID)
+            .statusCode(OK.code());
+  }
+
+  @Test
+  public void createSpaceStorageOwnerAndConnectorIdLegacy() {
+    // Owner not set in connector, IDs match
+    createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_C1_OWNER_AND_ID)
+            .statusCode(FORBIDDEN.code());
+    // Owner not set in connector, IDs do not match
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC4.json", AuthProfile.STORAGE_AUTH_TEST_C1_OWNER_AND_ID)
+            .statusCode(FORBIDDEN.code());
+  }
+
+  @Test
+  public void createSpaceStorageOwnerNoConnectorId() {
+    // Owner set in connector, Owners do not match
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_OTHER_OWNER_ID_ONLY)
+            .statusCode(FORBIDDEN.code());
+    // Owner set in connector, Owner IDs match
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_OWNER_ID_ONLY)
+            .statusCode(OK.code());
+  }
+
+  @Test
+  public void createSpaceStorageNoOwnerId() {
+    // Connector do not IDs match, Connector has no ownerId
+    createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_PSQL_ONLY)
+            .statusCode(FORBIDDEN.code());
+    // Connector do not IDs match, Connector has ownerId
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_PSQL_ONLY)
+            .statusCode(FORBIDDEN.code());
+    // Connector IDs match, Connector has ownerId
+    createSpace("/xyz/hub/auth/createTestStorageSpaceC2.json", AuthProfile.STORAGE_AUTH_TEST_C1_ONLY)
+            .statusCode(FORBIDDEN.code());
+    // Connector IDs match, Connector has no ownerId
+    createSpace("/xyz/hub/auth/createTestStorageSpace.json", AuthProfile.STORAGE_AUTH_TEST_C1_ONLY)
+            .statusCode(OK.code());
+
+  }
+
+  @Test
   public void createSpaceWithListenerPositive() {
     createSpace("/xyz/hub/auth/createSpaceWithListener.json", AuthProfile.CONNECTOR_AUTH_TEST_C1_AND_C2)
         .statusCode(OK.code());
+  }
+
+  @Test
+  public void testCreateSharedSpace() {
+    createSpace("/xyz/hub/auth/createSharedSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN)
+        .statusCode(OK.code());
+
+    getSpace("x-auth-test-space-shared", AuthProfile.ACCESS_OWNER_1_NO_ADMIN)
+        .body("storage", equalTo(null));
+  }
+
+  @Test
+  public void testCreateSharedSpaceAdminRead() {
+    createSpace("/xyz/hub/auth/createSharedSpace.json", AuthProfile.ACCESS_OWNER_1_ADMIN)
+        .statusCode(OK.code());
+
+    getSpace("x-auth-test-space-shared", AuthProfile.ACCESS_OWNER_1_ADMIN)
+        .body("storage.id", equalTo("psql"));
   }
 
   @Test
@@ -312,7 +419,7 @@ public class AuthTestsIT extends RestAssuredTest {
   public void testSpaceListWithAccessAll() {
     testSpaceListWithShared("*", AuthProfile.ACCESS_ALL)
         .statusCode(OK.code())
-        .body("$.size()", equalTo(2))
+        .body("$.size()", zeroSpaces ? equalTo(2) : greaterThanOrEqualTo(2) )
         .body("id", hasItems("x-auth-test-space", "x-auth-test-space-shared"));
   }
 
@@ -408,12 +515,15 @@ public class AuthTestsIT extends RestAssuredTest {
         .statusCode(FORBIDDEN.code());
 
     updateSpace(cleanUpId, "{\"packages\": [\"HERE\"]}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE)
-        .statusCode(OK.code());
-
-    updateSpace(cleanUpId, "{\"packages\": [\"HERE\", \"OSM\"]}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE)
         .statusCode(FORBIDDEN.code());
 
-    updateSpace(cleanUpId, "{\"packages\": [\"HERE\", \"OSM\"]}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE_OSM)
+    updateSpace(cleanUpId, "{\"packages\": [\"OSM\"]}", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
+        .statusCode(OK.code());
+
+    updateSpace(cleanUpId, "{\"packages\": [\"HERE\"]}", AuthProfile.ACCESS_OWNER_2_MANAGE_PACKAGES_HERE_OSM)
+        .statusCode(OK.code());
+
+    updateSpace(cleanUpId, "{\"packages\": [\"OSM\"]}", AuthProfile.ACCESS_OWNER_1_WITH_MS_PACKAGE_HERE_AND_MP_OSM)
         .statusCode(OK.code());
   }
 
@@ -424,12 +534,19 @@ public class AuthTestsIT extends RestAssuredTest {
         .extract()
         .path("id");
 
+    //Try to remove the OSM package
     updateSpace(cleanUpId, "{\"packages\": [\"HERE\"]}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE_WITH_OWNER)
         .statusCode(FORBIDDEN.code());
 
-    updateSpace(cleanUpId, "{\"packages\": [\"HERE\"]}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE)
+    //Try to remove the HERE package
+    updateSpace(cleanUpId, "{\"packages\": [\"OSM\"]}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE)
         .statusCode(OK.code());
 
+    //Try to remove both packages
+    updateSpace(cleanUpId, "{\"packages\": []}", AuthProfile.ACCESS_OWNER_1_MANAGE_PACKAGES_HERE)
+        .statusCode(FORBIDDEN.code());
+
+    //Try to remove both packages with admin permissions
     updateSpace(cleanUpId, "{\"packages\": []}", AuthProfile.ACCESS_OWNER_2)
         .statusCode(OK.code());
   }
@@ -673,6 +790,42 @@ public class AuthTestsIT extends RestAssuredTest {
   }
 
   @Test
+  public void testCreateSpaceWithSortablePropertiesAdmin() {
+    final ValidatableResponse response = given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body(content("/xyz/hub/createSpaceWithSortableProperties.json"))
+        .when()
+        .post("/spaces")
+        .then();
+
+    cleanUpId = response.extract().path("id");
+
+    response.statusCode(FORBIDDEN.code());
+  }
+
+  @Test
+  public void testCreateSpaceWithSortableProperties() {
+    final ValidatableResponse response = given()
+        .contentType(APPLICATION_JSON)
+        .accept(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_USE_CAPABILITIES_AND_ADMIN))
+        .body(content("/xyz/hub/createSpaceWithSortableProperties.json"))
+        .when()
+        .post("/spaces")
+        .then();
+
+    cleanUpId = response.extract().path("id");
+
+    response
+        .statusCode(OK.code())
+        .body("sortableProperties[0][0]", equalTo("name"))
+        .body("sortableProperties[1][0]", equalTo("other"));
+  }
+
+
+  @Test
   public void testListFeaturesByBBoxWithClusteringNegative() {
     createSpaceWithFeatures(
         "/xyz/hub/auth/createDefaultSpace.json",
@@ -688,14 +841,6 @@ public class AuthTestsIT extends RestAssuredTest {
         .get("/spaces/x-auth-test-space/bbox?west=179&north=89&east=-179&south=-89&clustering=hexbin")
         .then()
         .statusCode(FORBIDDEN.code());
-
-    given()
-        .accept(APPLICATION_GEO_JSON)
-        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_USE_CAPABILITIES))
-        .when()
-        .get("/spaces/x-auth-test-space/bbox?west=179&north=89&east=-179&south=-89&clustering=abc123")
-        .then()
-        .statusCode(BAD_REQUEST.code());
   }
 
   @Test
@@ -732,14 +877,6 @@ public class AuthTestsIT extends RestAssuredTest {
         .get("/spaces/x-auth-test-space/tile/quadkey/120?clustering=hexbin")
         .then()
         .statusCode(FORBIDDEN.code());
-
-    given()
-        .accept(APPLICATION_GEO_JSON)
-        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_USE_CAPABILITIES))
-        .when()
-        .get("/spaces/x-auth-test-space/tile/quadkey/120?clustering=abc123")
-        .then()
-        .statusCode(BAD_REQUEST.code());
   }
 
   @Test
@@ -789,5 +926,120 @@ public class AuthTestsIT extends RestAssuredTest {
         .then()
         .statusCode(OK.code())
         .body("id", notNullValue());
+  }
+
+  @Test
+  public void patchSpaceWithNewListener() {
+    cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithListenersObject.json", AuthProfile.ACCESS_ALL)
+        .statusCode(OK.code())
+        .extract()
+        .path("id");
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_LISTENER))
+        .body("{\"listeners\":{\"listener-test\": [{\"eventTypes\": [\"GetFeaturesByIdEvent.request\"], \"params\": {\"none\": true}}]}}")
+        .when()
+        .patch("/spaces/" + cleanUpId)
+        .then()
+        .statusCode(OK.code())
+        .body("listeners.another-listener", is(notNullValue()))
+        .body("listeners.listener-test", is(notNullValue()));
+  }
+
+  @Test
+  public void patchSpaceWithUnmodifiedListener() {
+    cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithListenersObject.json", AuthProfile.ACCESS_ALL)
+        .statusCode(OK.code())
+        .extract()
+        .path("id");
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_LISTENER))
+        .body("{\"listeners\":{\"another-listener\": [{\"eventTypes\": [\"GetFeaturesByIdEvent.request\"], \"params\": {\"someSpaceSpecificParamForTheConnector\": \"some value\"}}]}}")
+        .when()
+        .patch("/spaces/" + cleanUpId)
+        .then()
+        .statusCode(OK.code())
+        .body("listeners.another-listener", is(notNullValue()));
+  }
+
+  @Test
+  public void patchSpaceWithModifiedListener() {
+    cleanUpId = createSpace("/xyz/hub/auth/createSpaceWithListenersObject.json", AuthProfile.ACCESS_ALL)
+        .statusCode(OK.code())
+        .extract()
+        .path("id");
+
+    final String body = "{\"listeners\":{\"another-listener\": [{\"eventTypes\": [\"GetFeaturesByIdEvent.request\"], \"params\": {\"anotherParam\": true}}]}}";
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_LISTENER))
+        .body(body)
+        .when()
+        .patch("/spaces/" + cleanUpId)
+        .then()
+        .statusCode(FORBIDDEN.code());
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_ANOTHER_LISTENER))
+        .body(body)
+        .when()
+        .patch("/spaces/" + cleanUpId)
+        .then()
+        .statusCode(OK.code())
+        .body("listeners.another-listener", is(notNullValue()));
+  }
+
+  @Test
+  public void deleteChangesetsPositive() {
+    createSpaceWithFeatures(
+        "/xyz/hub/auth/createDefaultSpace.json",
+        "/xyz/hub/processedData.json",
+        AuthProfile.ACCESS_OWNER_1_ADMIN)
+        .statusCode(OK.code())
+        .body("features.size()", equalTo(252));
+
+    //Write version 1
+    FeatureCollection changeset1 = new FeatureCollection().withFeatures(
+        Arrays.asList(
+            new Feature().withId("F1").withProperties(new Properties().with("name", "1b")),
+            new Feature().withId("F3").withProperties(new Properties().with("name", "3a"))
+        )
+    );
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .body(changeset1.toString())
+        .post("/spaces/x-auth-test-space/features")
+        .then()
+        .statusCode(OK.code());
+
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .delete("/spaces/" + cleanUpId + "/changesets?version<1")
+        .then()
+        .statusCode(NO_CONTENT.code());
+  }
+
+  @Test
+  public void deleteChangesetsNegative() {
+    createSpaceWithFeatures(
+        "/xyz/hub/auth/createDefaultSpace.json",
+        "/xyz/hub/processedData.json",
+        AuthProfile.ACCESS_OWNER_1_ADMIN)
+        .statusCode(OK.code())
+        .body("features.size()", equalTo(252));
+
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_FEATURES_ONLY))
+        .when()
+        .delete("/spaces/" + cleanUpId + "/changesets?version<10")
+        .then()
+        .statusCode(FORBIDDEN.code());
   }
 }

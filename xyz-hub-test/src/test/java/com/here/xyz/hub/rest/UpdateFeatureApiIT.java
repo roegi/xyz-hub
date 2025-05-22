@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,31 +19,33 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_GEO_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
-import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
-import static io.netty.handler.codec.http.HttpResponseStatus.METHOD_NOT_ALLOWED;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItems;
+import static org.hamcrest.Matchers.notNullValue;
 
+import com.here.xyz.XyzSerializable;
 import com.here.xyz.models.geojson.coordinates.LineStringCoordinates;
 import com.here.xyz.models.geojson.coordinates.PointCoordinates;
 import com.here.xyz.models.geojson.coordinates.Position;
 import com.here.xyz.models.geojson.implementation.Feature;
+import com.here.xyz.models.geojson.implementation.FeatureCollection;
 import com.here.xyz.models.geojson.implementation.LineString;
 import com.here.xyz.models.geojson.implementation.Point;
-import java.io.IOException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.FixMethodOrder;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 import org.junit.runners.MethodSorters;
 
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
+@Category(RestTests.class)
 public class UpdateFeatureApiIT extends TestSpaceWithFeature {
 
   @BeforeClass
@@ -71,10 +73,23 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/featureWithNumberId.json")).
         when().
-        post("/spaces/x-psql-test/features").
+        post(getSpacesPath() + "/x-psql-test/features").
         then().
         statusCode(OK.code()).
         body("features[0].id", equalTo("1234"));
+  }
+
+  @Test
+  public void postFeatureWithWrongType() {
+    given().
+        accept(APPLICATION_GEO_JSON).
+        contentType(APPLICATION_GEO_JSON).
+        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
+        body(content("/xyz/hub/wrongType.json")).
+        when().
+        post(getSpacesPath() + "/x-psql-test/features").
+        then().
+        statusCode(BAD_REQUEST.code());
   }
 
   @Test
@@ -85,7 +100,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/updateFeature.json")).
         when().
-        put("/spaces/x-psql-test/features/Q2838923?addTags=baseball&removeTags=soccer").
+        put(getSpacesPath() + "/x-psql-test/features/Q2838923?addTags=baseball&removeTags=soccer").
         then().
         statusCode(OK.code()).
         body("id", equalTo("Q2838923")).
@@ -105,7 +120,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/updateFeature.json")).
         when().
-        put("/spaces/x-psql-test/features/Q2838924?addTags=baseball&removeTags=soccer").
+        put(getSpacesPath() + "/x-psql-test/features/Q2838924?addTags=baseball&removeTags=soccer").
         then().
         statusCode(OK.code()).
         body("id", equalTo("Q2838924")).
@@ -124,7 +139,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/updateFeature.json")).
         when().
-        put("/spaces/x-psql-test/features/Q2838924?addTags=baseball&removeTags=soccer&prefixId=foo:").
+        put(getSpacesPath() + "/x-psql-test/features/Q2838924?addTags=baseball&removeTags=soccer&prefixId=foo:").
         then().
         statusCode(OK.code()).
         body("id", equalTo("foo:Q2838924")).
@@ -143,7 +158,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/updateFeature.json")).
         when().
-        put("/spaces/x-psql-dummy/features/Q2838925").
+        put(getSpacesPath() + "/x-psql-dummy/features/Q2838925").
         then().
         statusCode(NOT_FOUND.code());
   }
@@ -156,7 +171,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/updateFeatureById.json")).
         when().
-        post("/spaces/x-psql-test/features?addTags=baseball&removeTags=soccer").
+        post(getSpacesPath() + "/x-psql-test/features?addTags=baseball&removeTags=soccer").
         then().
         statusCode(OK.code()).
         body("features[0].id", equalTo("Q271454")).
@@ -175,7 +190,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/updateFeatureById.json")).
         when().
-        post("/spaces/x-psql-test/features?addTags=baseball&removeTags=soccer&prefixId=foo:").
+        post(getSpacesPath() + "/x-psql-test/features?addTags=baseball&removeTags=soccer&prefixId=foo:").
         then().
         statusCode(OK.code()).
         body("features[0].id", equalTo("foo:Q271454")).
@@ -194,7 +209,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/createFeatureById.json")).
         when().
-        post("/spaces/x-psql-test/features?addTags=baseball&removeTags=soccer").
+        post(getSpacesPath() + "/x-psql-test/features?addTags=baseball&removeTags=soccer").
         then().
         statusCode(OK.code()).
         body("features[0].id", equalTo("Q271455")).
@@ -206,40 +221,27 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
   }
 
   @Test
-  public void updateFeatureById_put_WithOtherOwner() {
-    given().
-        accept(APPLICATION_GEO_JSON).
-        contentType(APPLICATION_GEO_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_2)).
-        body(content("/xyz/hub/updateFeature.json")).
-        when().
-        put("/spaces/x-psql-test/features/Q2838923?addTags=baseball&removeTags=soccer").
-        then().
-        statusCode(FORBIDDEN.code());
-  }
-
-  @Test
-  public void updateFeatureById_post_WithOtherOwner() {
-    given().
-        accept(APPLICATION_GEO_JSON).
-        contentType(APPLICATION_GEO_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_2)).
-        body(content("/xyz/hub/updateFeatureById.json")).
-        when().
-        post("/spaces/x-psql-test/features?addTags=baseball&removeTags=soccer").
-        then().
-        statusCode(FORBIDDEN.code());
-  }
-
-  @Test
-  public void updateFeatureById_put_WithAllAccess() {
+  public void updateFeatureById_put_WithAccessAll() {
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(content("/xyz/hub/updateFeature.json")).
         when().
-        put("/spaces/x-psql-test/features/Q2838923?addTags=baseball&removeTags=soccer").
+        patch(getSpacesPath() + "/x-psql-test/features/Q2838923?addTags=baseball&removeTags=soccer").
+        then().
+        statusCode(OK.code());
+  }
+
+  @Test
+  public void updateFeatureById_patch_WithAllAccess() {
+    given().
+        accept(APPLICATION_GEO_JSON).
+        contentType(APPLICATION_GEO_JSON).
+        headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
+        body(content("/xyz/hub/patchFeature.json")).
+        when().
+        patch(getSpacesPath() + "/x-psql-test/features/Q2838923?addTags=baseball&removeTags=soccer").
         then().
         statusCode(OK.code());
   }
@@ -252,7 +254,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(content("/xyz/hub/updateFeatureById.json")).
         when().
-        post("/spaces/x-psql-test/features?addTags=baseball&removeTags=soccer").
+        post(getSpacesPath() + "/x-psql-test/features?addTags=baseball&removeTags=soccer").
         then().
         statusCode(OK.code());
   }
@@ -265,7 +267,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
         body(content("/xyz/hub/emptyFeatureCollection.json")).
         when().
-        post("/spaces/x-psql-test/features?addTags=baseball").
+        post(getSpacesPath() + "/x-psql-test/features?addTags=baseball").
         then().
         statusCode(OK.code()).
         body("features.size()", equalTo(0));
@@ -282,7 +284,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(point.serialize()).
         when().
-        post("/spaces/x-psql-test/features").
+        post(getSpacesPath() + "/x-psql-test/features").
         then().
         statusCode(OK.code());
 
@@ -300,7 +302,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(line.serialize()).
         when().
-        post("/spaces/x-psql-test/features").
+        post(getSpacesPath() + "/x-psql-test/features").
         then().
         statusCode(OK.code());
   }
@@ -316,7 +318,7 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(point.serialize()).
         when().
-        put("/spaces/x-psql-test/features/C001").
+        put(getSpacesPath() + "/x-psql-test/features/C001").
         then().
         statusCode(OK.code());
 
@@ -334,31 +336,74 @@ public class UpdateFeatureApiIT extends TestSpaceWithFeature {
         headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
         body(line.serialize()).
         when().
-        put("/spaces/x-psql-test/features/C001").
+        put(getSpacesPath() + "/x-psql-test/features/C001").
         then().
         statusCode(OK.code()).
         body("geometry.type", equalTo("LineString"));
   }
 
   @Test
-  public void testReadOnly() {
-    given().
-        contentType(APPLICATION_JSON).
-        accept(APPLICATION_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
-        body("{\"readOnly\":true}").
-        when().patch("/spaces/x-psql-test").then().statusCode(OK.code());
+  public void validateFeature() {
+    String featureId = "Q2838923";
+    validateFeatureProperties(given()
+        .urlEncodingEnabled(false)
+        .accept(APPLICATION_GEO_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .get(getSpacesPath() + "/x-psql-test/features?id=" + featureId)
+        .then()
+        .statusCode(OK.code()), featureId);
+  }
 
-    Feature point = Feature.createEmptyFeature()
-        .withId("C001")
-        .withGeometry(new Point().withCoordinates(new PointCoordinates(0, 1)));
+  @Test
+  public void postFeatureWithVersionWithoutConflictDetection() throws Exception {
+    FeatureCollection featureCollection = XyzSerializable.deserialize(content("/xyz/hub/updateFeatureById.json"));
+    featureCollection.getFeatures().get(0).getProperties().getXyzNamespace().setVersion(5);
+
     given().
         accept(APPLICATION_GEO_JSON).
         contentType(APPLICATION_GEO_JSON).
-        headers(getAuthHeaders(AuthProfile.ACCESS_ALL)).
-        body(point.serialize()).
+        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
+        body(featureCollection.serialize()).
         when().
-        put("/spaces/x-psql-test/features/C001").prettyPeek().
-        then().statusCode(METHOD_NOT_ALLOWED.code());
+        post(getSpacesPath() + "/x-psql-test/features").
+        then().
+        statusCode(OK.code());
   }
+
+  @Test
+  public void patchFeatureWithVersionWithoutConflictDetection() throws Exception {
+    Feature feature = XyzSerializable.deserialize(content("/xyz/hub/updateFeature.json"));
+    feature.getProperties().getXyzNamespace().setVersion(5);
+
+    given().
+        accept(APPLICATION_GEO_JSON).
+        contentType(APPLICATION_GEO_JSON).
+        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
+        body(feature.serialize()).
+        when().
+        patch(getSpacesPath() + "/x-psql-test/features/Q2838923").
+        then().
+        statusCode(OK.code());
+  }
+
+  @Test
+  public void updateFeatureById_putNonModified() {
+    storeNonModified();
+    storeNonModified();
+  }
+
+  private static void storeNonModified() {
+    given().
+        accept(APPLICATION_GEO_JSON).
+        contentType(APPLICATION_GEO_JSON).
+        headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN)).
+        body(content("/xyz/hub/updateFeatureNonModified.json")).
+        when().
+        put(getSpacesPath() + "/x-psql-test/features").
+        then().
+        statusCode(OK.code()).
+        body("features[0].properties.'@ns:com:here:xyz'.createdAt", notNullValue());
+  }
+
 }

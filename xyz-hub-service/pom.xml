@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (C) 2017-2019 HERE Europe B.V.
+  ~ Copyright (C) 2017-2024 HERE Europe B.V.
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@
   <parent>
     <groupId>com.here.xyz</groupId>
     <artifactId>xyz-hub</artifactId>
-    <relativePath>../</relativePath>
-    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+    <version>3.17.12-SNAPSHOT</version>
   </parent>
 
   <licenses>
@@ -45,6 +45,7 @@
   <properties>
     <startHub>false</startHub>
     <pathToConfig>deployment/local/config.json</pathToConfig>
+    <dockerComposeFile>docker-compose.yml</dockerComposeFile>
   </properties>
 
   <build>
@@ -65,23 +66,12 @@
       <resource>
         <directory>src/main/resources</directory>
         <filtering>false</filtering>
-        <includes>
-          <include>**/*</include>
-        </includes>
+        <excludes>
+          <exclude>**/build.properties</exclude>
+        </excludes>
       </resource>
     </resources>
   </build>
-
-  <pluginRepositories>
-    <pluginRepository>
-      <id>cme-content-tools-virtual</id>
-      <name>HERE Artifactory - Content Tools Virtual</name>
-      <snapshots>
-        <updatePolicy>always</updatePolicy>
-      </snapshots>
-      <url>https://artifactory.in.here.com/artifactory/cme-content-tools-virtual</url>
-    </pluginRepository>
-  </pluginRepositories>
   <profiles>
     <profile>
       <activation>
@@ -93,6 +83,7 @@
       <build>
         <plugins>
           <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-shade-plugin</artifactId>
             <configuration>
               <filters>
@@ -105,11 +96,27 @@
                     <exclude>**/Log4j2Plugins.dat</exclude>
                   </excludes>
                 </filter>
+                <filter>
+                  <artifact>org.apache.logging.log4j:log4j-jcl</artifact>
+                  <includes>
+                    <include>**</include>
+                  </includes>
+                </filter>
+                <filter>
+                  <artifact>commons-logging:commons-logging</artifact>
+                  <includes>
+                    <include>**</include>
+                  </includes>
+                </filter>
               </filters>
               <finalName>xyz-hub-service</finalName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.here.xyz.hub.Service</mainClass>
+                  <manifestEntries>
+                    <Multi-Release>true</Multi-Release>
+                  </manifestEntries>
                 </transformer>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
               </transformers>
@@ -122,7 +129,6 @@
                 <phase>package</phase>
               </execution>
             </executions>
-            <groupId>org.apache.maven.plugins</groupId>
           </plugin>
         </plugins>
       </build>
@@ -138,12 +144,15 @@
               <execution>
                 <configuration>
                   <arguments>
+                    <argument>compose</argument>
+                    <argument>--file</argument>
+                    <argument>../${dockerComposeFile}</argument>
                     <argument>up</argument>
                     <argument>--detach</argument>
                     <argument>--build</argument>
                     <argument>--force-recreate</argument>
                   </arguments>
-                  <executable>docker-compose</executable>
+                  <executable>docker</executable>
                 </configuration>
                 <goals>
                   <goal>exec</goal>
@@ -161,36 +170,27 @@
 
   <dependencies>
 
+    <!-- XYZ libraries -->
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>xyz-util</artifactId>
+    </dependency>
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>xyz-models</artifactId>
     </dependency>
-
-    <!-- Embedded xyz lambdas -->
     <dependency>
       <groupId>${project.groupId}</groupId>
       <artifactId>xyz-psql-connector</artifactId>
-      <exclusions>
-        <exclusion>
-          <artifactId>log4j-slf4j-impl</artifactId>
-          <groupId>org.apache.logging.log4j</groupId>
-        </exclusion>
-        <exclusion>
-          <artifactId>log4j-core</artifactId>
-          <groupId>org.apache.logging.log4j</groupId>
-        </exclusion>
-        <exclusion>
-          <artifactId>log4j-api</artifactId>
-          <groupId>org.apache.logging.log4j</groupId>
-        </exclusion>
-      </exclusions>
+    </dependency>
+
+    <!-- Added only temporary; Can be removed when legacy job service was removed -->
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>xyz-job-service</artifactId>
     </dependency>
 
     <!-- Logging libraries -->
-    <dependency>
-      <artifactId>slf4j-api</artifactId>
-      <groupId>org.slf4j</groupId>
-    </dependency>
     <dependency>
       <artifactId>log4j-slf4j-impl</artifactId>
       <groupId>org.apache.logging.log4j</groupId>
@@ -200,10 +200,13 @@
       <groupId>org.apache.logging.log4j</groupId>
     </dependency>
     <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-jcl</artifactId>
+    </dependency>
+    <dependency>
       <artifactId>disruptor</artifactId>
       <groupId>com.lmax</groupId>
     </dependency>
-
 
     <!-- Vert.x -->
     <dependency>
@@ -215,7 +218,15 @@
       <groupId>io.vertx</groupId>
     </dependency>
     <dependency>
-      <artifactId>vertx-web-api-contract</artifactId>
+      <artifactId>vertx-openapi</artifactId>
+      <groupId>io.vertx</groupId>
+    </dependency>
+    <dependency>
+      <artifactId>vertx-web-openapi</artifactId>
+      <groupId>io.vertx</groupId>
+    </dependency>
+    <dependency>
+      <artifactId>vertx-web-openapi-router</artifactId>
       <groupId>io.vertx</groupId>
     </dependency>
     <dependency>
@@ -238,16 +249,20 @@
       <artifactId>vertx-redis-client</artifactId>
       <groupId>io.vertx</groupId>
     </dependency>
+
+    <!-- Netty native transport -->
     <dependency>
-      <artifactId>vertx-jdbc-client</artifactId>
-      <groupId>io.vertx</groupId>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-transport-native-kqueue</artifactId>
+      <classifier>osx-x86_64</classifier>
+    </dependency>
+    <dependency>
+      <groupId>io.netty</groupId>
+      <artifactId>netty-transport-native-epoll</artifactId>
+      <classifier>linux-x86_64</classifier>
     </dependency>
 
     <!-- AWS SDK -->
-    <dependency>
-      <artifactId>aws-java-sdk-s3</artifactId>
-      <groupId>com.amazonaws</groupId>
-    </dependency>
     <dependency>
       <artifactId>aws-java-sdk-lambda</artifactId>
       <groupId>com.amazonaws</groupId>
@@ -264,42 +279,134 @@
       <artifactId>aws-java-sdk-sns</artifactId>
       <groupId>com.amazonaws</groupId>
     </dependency>
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-cloudwatch</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-secretsmanager</artifactId>
+    </dependency>
+
+    <!-- AWS SDK V2 -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sns</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>auth</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>secretsmanager</artifactId>
+    </dependency>
+
+    <!-- For Job API only -->
+    <dependency>
+      <artifactId>aws-java-sdk-emrserverless</artifactId>
+      <groupId>com.amazonaws</groupId>
+    </dependency>
 
     <!--  GeoTools libraries -->
     <dependency>
       <artifactId>gt-api</artifactId>
       <groupId>org.geotools</groupId>
+      <exclusions>
+        <exclusion>
+          <groupId>javax.media</groupId>
+          <artifactId>jai_core</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <artifactId>gt-main</artifactId>
+      <groupId>org.geotools</groupId>
     </dependency>
     <dependency>
       <artifactId>gt-referencing</artifactId>
       <groupId>org.geotools</groupId>
+      <exclusions>
+        <exclusion>
+          <groupId>javax.media</groupId>
+          <artifactId>jai_core</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <artifactId>gt-epsg-hsql</artifactId>
       <groupId>org.geotools</groupId>
+      <exclusions>
+        <exclusion>
+          <groupId>javax.media</groupId>
+          <artifactId>jai_core</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <artifactId>gt-epsg-extension</artifactId>
       <groupId>org.geotools</groupId>
+      <exclusions>
+        <exclusion>
+          <groupId>javax.media</groupId>
+          <artifactId>jai_core</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+
+    <!-- Cache -->
+    <dependency>
+      <artifactId>expiringmap</artifactId>
+      <groupId>net.jodah</groupId>
+    </dependency>
+
+    <!-- Jackson -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-annotations</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
     </dependency>
 
     <!-- External libraries -->
     <dependency>
       <artifactId>mapbox-vector-tile</artifactId>
       <groupId>com.wdtinc</groupId>
-      <version>2.0.0</version>
     </dependency>
     <dependency>
-      <artifactId>expiringmap</artifactId>
-      <groupId>net.jodah</groupId>
+      <groupId>com.ongres.scram</groupId>
+      <artifactId>client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>dnsjava</groupId>
+      <artifactId>dnsjava</artifactId>
     </dependency>
 
     <!-- Test -->
     <dependency>
-      <artifactId>junit</artifactId>
-      <groupId>junit</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <groupId>org.junit.jupiter</groupId>
       <scope>test</scope>
     </dependency>
-
+    <dependency>
+      <groupId>org.junit.vintage</groupId>
+      <artifactId>junit-vintage-engine</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
+
 </project>

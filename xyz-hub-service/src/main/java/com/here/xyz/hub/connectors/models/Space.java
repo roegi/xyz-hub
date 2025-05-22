@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2021 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,19 +26,28 @@ import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.annotation.JsonView;
 import com.google.common.primitives.Longs;
+import com.here.xyz.XyzSerializable.Public;
+import com.here.xyz.XyzSerializable.Static;
 import com.here.xyz.hub.Service;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.util.service.Core;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.core.Handler;
+import io.vertx.core.Promise;
+import io.vertx.core.json.Json;
+import io.vertx.core.json.jackson.DatabindCodec;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import org.slf4j.Marker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
 
 /**
  * The space configuration.
@@ -48,50 +57,98 @@ import org.slf4j.Marker;
 @JsonInclude(Include.NON_DEFAULT)
 public class Space extends com.here.xyz.models.hub.Space implements Cloneable {
 
-  public static final long CONTENT_UPDATED_AT_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(1);
-  private final static long MAX_SLIDING_WINDOW = TimeUnit.DAYS.toMillis(10);
+  private static final Logger logger = LogManager.getLogger();
+  private static final long DEFAULT_CONTENT_UPDATED_AT_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(1);
+  private static final long NO_CACHE_INTERVAL_MILLIS = DEFAULT_CONTENT_UPDATED_AT_INTERVAL_MILLIS * 2;
+  private static final long MIN_SERVICE_CACHE_INTERVAL_MILLIS = TimeUnit.DAYS.toMillis(1);
+  private Connector resolvedStorageConnector;
 
   /**
-   * Indicates the last time the content of a space was updated.
+   * Add random 20 seconds offset to avoid all service nodes sending cache invalidation for the space at the same time
    */
+  public static final long CONTENT_UPDATED_AT_INTERVAL_MILLIS = DEFAULT_CONTENT_UPDATED_AT_INTERVAL_MILLIS
+      - TimeUnit.SECONDS.toMillis((long) (Math.random() * 20));
+
+  private final static long MAX_SLIDING_WINDOW = TimeUnit.DAYS.toMillis(10);
+
   @JsonInclude(Include.NON_DEFAULT)
-  @JsonView(Public.class)
-  public long contentUpdatedAt = 0;
+  @JsonView({Public.class, Static.class})
+  public boolean notSendDeleteMse = false;
 
   /**
    * An indicator, if the data in the space is edited often (value tends to 1) or static (value tends to 0).
    */
-  @JsonIgnore
+  @JsonView({Internal.class, Static.class})
   public double volatilityAtLastContentUpdate = 0;
 
   @JsonIgnore
   private Map<ConnectorType, Map<String, List<ResolvableListenerConnectorRef>>> resolvedConnectorRefs;
 
+  private String region;
+
+  public static Future<Space> resolveSpace(Marker marker, String spaceId) {
+    return Service.spaceConfigClient.get(marker, spaceId);
+  }
+
+  @JsonIgnore
+  public Connector getResolvedStorageConnector() {
+    if (resolvedStorageConnector == null)
+      throw new NullPointerException("Resolved storage connector is null");
+    return resolvedStorageConnector;
+  }
+
+  public Future<Connector> resolveStorage(Marker marker) {
+    return resolveConnector(marker, getStorage().getId())
+        .compose(connector -> Future.succeededFuture(resolvedStorageConnector = connector));
+  }
+
+  public static Future<Connector> resolveConnector(Marker marker, String connectorId) {
+    Promise<Connector> p = Promise.promise();
+    resolveConnector(marker, connectorId, p);
+    return p.future();
+  }
+
   public static void resolveConnector(Marker marker, String connectorId, Handler<AsyncResult<Connector>> handler) {
     Service.connectorConfigClient.get(marker, connectorId, arStorage -> {
       if (arStorage.failed()) {
-        Logging.getLogger().info(marker, "Unable to load the connector definition for storage '{}'",
+        logger.warn(marker, "Unable to load the connector definition for storage '{}'",
             connectorId, arStorage.cause());
       } else {
         final Connector storage = arStorage.result();
-        Logging.getLogger().info(marker, "Loaded storage, configuration is: {}", io.vertx.core.json.Json.encode(storage));
+        logger.info(marker, "Loaded storage, configuration is: {}", io.vertx.core.json.Json.encode(storage));
       }
       handler.handle(arStorage);
     });
   }
 
+  public static class InvalidExtensionException extends Exception {
+    InvalidExtensionException(String msg) {
+      super(msg);
+    }
+  }
+
+  public Future<Map<String, Object>> resolveCompositeParams(Marker marker) {
+    if (getExtension() == null)
+      return Future.succeededFuture(Collections.emptyMap());
+
+    return resolveSpace(marker, getExtension().getSpaceId())
+        .compose(extendedSpace -> extendedSpace == null ?
+                Future.failedFuture(new InvalidExtensionException("Unable to load extended resource with id: " + getExtension().getSpaceId())):
+                Future.succeededFuture(resolveCompositeParams(extendedSpace)));
+  }
+
   @JsonView(Internal.class)
   @SuppressWarnings("unused")
   public CacheProfile getAutoCacheProfile() {
-    return getCacheProfile(false, true);
+    return getCacheProfile(false, true, false);
   }
 
   @JsonView(Internal.class)
   public double getVolatility() {
-    long now = System.currentTimeMillis();
+    long now = Core.currentTimeMillis();
 
     // if the space existed for a shorter period of time, use this as a sliding window.
-    long slidingWindow = Math.min(now - getCreatedAt(), MAX_SLIDING_WINDOW);
+    long slidingWindow = Math.min(1 + now - getCreatedAt(), MAX_SLIDING_WINDOW);
     double averageInterval = slidingWindow * (1 - volatilityAtLastContentUpdate);
 
     // limit the interval to the length of the sliding window
@@ -104,7 +161,9 @@ public class Space extends com.here.xyz.models.hub.Space implements Cloneable {
 
   @JsonIgnore
   public Map<String, List<ResolvableListenerConnectorRef>> getEventTypeConnectorRefsMap(ConnectorType connectorType) {
-    if (resolvedConnectorRefs == null) resolvedConnectorRefs = new HashMap<>();
+    if (resolvedConnectorRefs == null) {
+      resolvedConnectorRefs = new ConcurrentHashMap<>();
+    }
     resolvedConnectorRefs.computeIfAbsent(connectorType, k -> {
       List<Space.ListenerConnectorRef> connectorRefs = getConnectorRefs(connectorType);
 
@@ -131,7 +190,7 @@ public class Space extends com.here.xyz.models.hub.Space implements Cloneable {
         return Collections.emptyMap();
       }
       return getListeners();
-    } else if (connectorType == ConnectorType.PROCESSOR){
+    } else if (connectorType == ConnectorType.PROCESSOR) {
       if (getProcessors() == null) {
         return Collections.emptyMap();
       }
@@ -144,61 +203,68 @@ public class Space extends com.here.xyz.models.hub.Space implements Cloneable {
   @JsonIgnore
   private List<Space.ListenerConnectorRef> getConnectorRefs(final ConnectorType connectorType) {
     return getConnectorRefsMap(connectorType)
-            .values()
-            .stream()
-            .flatMap(Collection::stream)
-            .collect(Collectors.toList());
+        .values()
+        .stream()
+        .flatMap(Collection::stream)
+        .collect(Collectors.toList());
+  }
+
+  public boolean hasRequestListeners() {
+    if (getListeners() == null || getListeners().isEmpty()) return false;
+    List<Space.ListenerConnectorRef> listeners = getConnectorRefs(ConnectorType.LISTENER);
+    return listeners.stream().anyMatch(l -> l.getEventTypes() != null &&
+        l.getEventTypes().stream().anyMatch(et -> et.endsWith(".request")));
   }
 
   @JsonIgnore
-  public CacheProfile getCacheProfile(boolean skipCache, boolean autoConfig) {
-    // Cache is manually deactivated, either for the space or for this specific request
+  public CacheProfile getCacheProfile(boolean skipCache, boolean autoConfig, boolean readOnlyAccess) {
+    //Cache is manually deactivated by the user, either for the space or for this specific request
     if (getCacheTTL() == 0 || skipCache) {
       return CacheProfile.NO_CACHE;
     }
 
-    // Cache is manually set -> use those settings instead
+    //Cache is manually / user defined at the space -> use those settings instead
     if (getCacheTTL() > 0) {
-      return new CacheProfile(getCacheTTL() / 3, getCacheTTL(), Long.MAX_VALUE, getContentUpdatedAt());
+      return new CacheProfile(getCacheTTL() / 3, getCacheTTL(), Long.MAX_VALUE, getCacheTTL(), getContentUpdatedAt());
     }
 
-    // Automatic cache configuration is not active.
+    //Automatic cache configuration is not supported at all
     if (!autoConfig) {
       return CacheProfile.NO_CACHE;
     }
 
     double volatility = getVolatility();
-    long timeSinceLastUpdate = System.currentTimeMillis() - getContentUpdatedAt();
+    long timeSinceLastUpdate = Core.currentTimeMillis() - getContentUpdatedAt();
+    long staticTTL = readOnlyAccess ? CacheProfile.MAX_STATIC_TTL : 0;
 
-    // 0 min to 2 min -> no cache
-    if (timeSinceLastUpdate < 2 * CONTENT_UPDATED_AT_INTERVAL_MILLIS) {
+    //For mutable responses and a space which was changed within the no-cache interval -> no cache
+    if (!readOnlyAccess && timeSinceLastUpdate < NO_CACHE_INTERVAL_MILLIS) {
       return CacheProfile.NO_CACHE;
     }
 
-    // 2 min to (1 hour + volatility penalty time ) -> cache only in the service
+    //For all other responses and a space which was changed
+    //within the service-cache interval (minimum service-cache interval + some volatility penalty time) -> cache only in the service cache.
+    //Also, if the response is mutable (not resulting from a read-only request) -> cache only in the service cache.
     long volatilityPenalty = (long) (volatility * volatility * TimeUnit.DAYS.toMillis(7));
-    if (timeSinceLastUpdate < TimeUnit.HOURS.toMillis(1) + volatilityPenalty) {
-      return new CacheProfile(0, 0, CacheProfile.MAX_SERVICE_TTL, getContentUpdatedAt());
-    }
+    long serviceCacheInterval = MIN_SERVICE_CACHE_INTERVAL_MILLIS + volatilityPenalty;
+    if (!readOnlyAccess || timeSinceLastUpdate < serviceCacheInterval)
+      return new CacheProfile(0, 0, CacheProfile.MAX_SERVICE_TTL, staticTTL, getContentUpdatedAt());
 
-    // no changes for more than (1 hour + volatility penalty time ) -> cache in the service and in the browser
-    return new CacheProfile(TimeUnit.MINUTES.toMillis(3), TimeUnit.HOURS.toMillis(24), CacheProfile.MAX_SERVICE_TTL,
+    //For all other responses of a space which was not changed for longer time -> cache in the service *and* in the browser / CDN
+    return new CacheProfile(TimeUnit.MINUTES.toMillis(3), TimeUnit.HOURS.toMillis(24), CacheProfile.MAX_SERVICE_TTL, staticTTL,
         getContentUpdatedAt());
   }
 
-  public long getContentUpdatedAt() {
-    if (contentUpdatedAt == 0) {
-      contentUpdatedAt = getCreatedAt();
-    }
-    return contentUpdatedAt;
+  public String getRegion() {
+    return region;
   }
 
-  public void setContentUpdatedAt(long contentUpdatedAt) {
-    this.contentUpdatedAt = contentUpdatedAt;
+  public void setRegion(String region) {
+    this.region = region;
   }
 
-  public Space withContentUpdatedAt(long contentUpdatedAt) {
-    setContentUpdatedAt(contentUpdatedAt);
+  public Space withRegion(String region) {
+    setRegion(region);
     return this;
   }
 
@@ -210,6 +276,7 @@ public class Space extends com.here.xyz.models.hub.Space implements Cloneable {
    * Extended space class, which includes the granted access rights.
    */
   public static class SpaceWithRights extends Space {
+
     @JsonView(Public.class)
     public List<String> rights;
   }
@@ -224,28 +291,60 @@ public class Space extends com.here.xyz.models.hub.Space implements Cloneable {
   }
 
   public static class CacheProfile {
-
-    @JsonIgnore
-    public static final CacheProfile NO_CACHE = new CacheProfile(0, 0, 0, 0);
-    @JsonIgnore
+    public static final CacheProfile NO_CACHE = new CacheProfile(0, 0, 0, 0, 0);
     private static final long MAX_BROWSER_TTL = TimeUnit.MINUTES.toMillis(3);
-    @JsonIgnore
     private static final long MAX_CDN_TTL = TimeUnit.DAYS.toMillis(365);
-    @JsonIgnore
     private static final long MAX_SERVICE_TTL = TimeUnit.DAYS.toMillis(365);
+    private static final long MAX_STATIC_TTL = TimeUnit.DAYS.toMillis(365);
 
+    /**
+     * How long to cache the response in the browser cache in milliseconds.
+     */
     public final long browserTTL;
+
+    /**
+     * How long to cache the response in a CDN cache in milliseconds.
+     */
     public final long cdnTTL;
+
+    /**
+     * How long to cache the response in the volatile service cache in milliseconds.
+     */
+    @JsonIgnore
     public final long serviceTTL;
+
+    /**
+     * How long to cache the response in the static / persistent service cache in milliseconds.
+     */
+    public final long staticTTL;
     @JsonIgnore
     public final long contentUpdatedAt;
 
     @SuppressWarnings("UnstableApiUsage")
-    public CacheProfile(long browserTTL, long cdnTTL, long serviceTTL, long contentUpdatedAt) {
+    public CacheProfile(long browserTTL, long cdnTTL, long serviceTTL, long staticTTL, long contentUpdatedAt) {
       this.browserTTL = Longs.constrainToRange(browserTTL, 0, MAX_BROWSER_TTL);
       this.cdnTTL = Longs.constrainToRange(cdnTTL, 0, MAX_CDN_TTL);
       this.serviceTTL = Longs.constrainToRange(serviceTTL, 0, MAX_SERVICE_TTL);
+      this.staticTTL = staticTTL;
       this.contentUpdatedAt = contentUpdatedAt;
     }
+  }
+
+  public Map<String,Object> asMap() {
+    try {
+      //noinspection unchecked
+      return Json.decodeValue(DatabindCodec.mapper().writerWithView(Static.class).writeValueAsString(this), Map.class);
+    } catch (Exception e) {
+      return Collections.emptyMap();
+    }
+  }
+
+  /**
+   * Used for logging purposes.
+   * @return
+   */
+  @Override
+  public String toString() {
+    return Json.encode(this);
   }
 }

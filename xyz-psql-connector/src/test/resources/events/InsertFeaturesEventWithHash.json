@@ -1,8 +1,12 @@
 {
   "type": "ModifyFeaturesEvent",
   "space": "foo",
-  "enableUUID": true,
+  "conflictDetectionEnabled": true,
   "params": {},
+  "connectorParams": {
+    "propertySearch": true,
+    "connectorId": "test-connector"
+  },
   "insertFeatures": [
     {
       "geometry": {
@@ -16,6 +20,10 @@
       "properties": {
         "name": "Toyota",
         "@ns:com:here:xyz": {
+          "space" : "foo",
+          "createdAt" : 1517504700726,
+          "updatedAt" : 1517504700726,
+          "version": 0,
           "tags": [
             "yellow"
           ]
@@ -34,6 +42,10 @@
       "properties": {
         "name": "Tesla",
         "@ns:com:here:xyz": {
+          "space" : "foo",
+          "createdAt" : 1517504700726,
+          "updatedAt" : 1517504700726,
+          "version": 0,
           "tags": [
             "red"
           ]

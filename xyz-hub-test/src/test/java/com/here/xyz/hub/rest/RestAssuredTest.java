@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,11 +19,11 @@
 
 package com.here.xyz.hub.rest;
 
+import static io.restassured.config.DecoderConfig.decoderConfig;
+import static io.restassured.config.EncoderConfig.encoderConfig;
+
 import com.here.xyz.hub.auth.TestAuthenticator;
-import com.jayway.restassured.RestAssured;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import org.apache.commons.io.IOUtils;
+import io.restassured.RestAssured;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 
@@ -32,8 +32,11 @@ public class RestAssuredTest extends TestAuthenticator {
     @BeforeClass
     public static void configureRestAssured() {
         RestAssured.baseURI = RestAssuredConfig.config().baseURI;
-        RestAssured.port = RestAssuredConfig.config().port;
+        RestAssured.port = RestAssuredConfig.config().hubPort;
         RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
+        RestAssured.config = RestAssured.config().httpClient(RestAssured.config().getHttpClientConfig().reuseHttpClientInstance());
+        RestAssured.config = RestAssured.config().encoderConfig(encoderConfig().defaultContentCharset("UTF-8"));
+        RestAssured.config = RestAssured.config().decoderConfig(decoderConfig().defaultContentCharset("UTF-8"));
     }
 
     @AfterClass

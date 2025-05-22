@@ -1,45 +1,35 @@
 {
   "configuration": {
     "status": "info",
-
     "name": "Default Log Config",
     "packages": "com.here.xyz",
-
-    "ThresholdFilter": {
-      "level": "info"
-    },
     "appenders": {
-      "RollingFile": {
+      "RollingRandomAccessFile": {
         "name": "RollingFile-Appender",
         "fileName": "${env:LOG_PATH}/trace.log.0",
         "filePattern": "${env:LOG_PATH}/trace.log.%i",
         "PatternLayout": {
-          "ScriptPatternSelector": {
-            "defaultPattern": "{\"t\":\"%p\",\"time\":\"%d{ISO8601}\",\"unixtime\":\"%d{UNIX_MILLIS}\",\"src\":\"%C{1}:%L\",\"msg\":\"%replace{%replace{%.-4096msg%throwable}{[\n]}{\\\\n}}{[\\\"]}{\\\\\"}\",\"streamId\":\"%marker\"}%n%xEx{none}",
-            "Script": {
-              "name": "JavaScriptSelector",
-              "language": "JavaScript",
-              "value": "logEvent.getMessage().getFormattedMessage().contains('clientInfo') ? 'STREAM' : null"
-            },
+          "MarkerPatternSelector": {
+            "defaultPattern": "{\"time\":\"%d{ISO8601}\",\"t\":\"%p\",\"unixtime\":\"%d{UNIX_MILLIS}\",\"msg\":\"%enc{%.-4096msg%ex}{JSON} \",\"streamId\":\"%marker\",\"src\":\"%c\"}%n%xEx{none}",
             "PatternMatch": {
-              "key": "STREAM",
+              "key": "ACCESS",
               "pattern": "%m%n"
             }
           }
         },
         "Policies": {
           "SizeBasedTriggeringPolicy": {
-            "size": "100 MB"
+            "size": "64 MB"
           }
         },
         "DefaultRolloverStrategy": {
-          "max": "1"
+          "max": "2"
         }
       }
     },
     "loggers": {
       "root": {
-        "level": "info",
+        "level": "warn",
         "AppenderRef": {
           "ref": "RollingFile-Appender"
         }

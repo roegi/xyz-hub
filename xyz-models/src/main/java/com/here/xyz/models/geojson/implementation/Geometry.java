@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,12 +19,17 @@
 
 package com.here.xyz.models.geojson.implementation;
 
+import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY;
+
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.here.xyz.Typed;
 import com.here.xyz.models.geojson.coordinates.BBox;
 import com.here.xyz.models.geojson.coordinates.JTSHelper;
 import com.here.xyz.models.geojson.exceptions.InvalidGeometryException;
+
+import java.util.HashSet;
 import java.util.List;
 
 /**
@@ -36,8 +41,9 @@ import java.util.List;
 })
 public abstract class Geometry implements Typed {
 
+  @JsonInclude(NON_EMPTY)
   private BBox bbox;
-  private com.vividsolutions.jts.geom.Geometry geomCache;
+  private org.locationtech.jts.geom.Geometry geomCache;
 
   /**
    * Convert a JTS geometry into a {@link Geometry Geo JSON geometry}.
@@ -47,7 +53,7 @@ public abstract class Geometry implements Typed {
    * @return the Geo JSON geometry or null, if conversion is not possible or results in null.
    */
   @SuppressWarnings({"unchecked", "unused"})
-  public static <T extends Geometry> T convertJTSGeometry(com.vividsolutions.jts.geom.Geometry jtsGeometry) {
+  public static <T extends Geometry> T convertJTSGeometry(org.locationtech.jts.geom.Geometry jtsGeometry) {
     if (jtsGeometry == null) {
       return null;
     }
@@ -185,13 +191,26 @@ public abstract class Geometry implements Typed {
     // reject Polygons that do not follow the right-hand rule.
     //
     // --> Therefore we will not check the right-hand rule here, even while it would be possible!
+
+// HERESUP-1283   HashSet<Object> hset = new HashSet<Object>();
+
     for (int i = 0; i < points.size(); i++) {
       final Object point = points.get(i);
+      
       if (!(point instanceof List)) {
         throw new InvalidGeometryException("Expected Point at index #" + i + " in the LinearRing coordinates");
       }
+
       validatePointCoordinates(point);
+
+/* HERESUP-1283
+      if( hset.contains(point) && i < points.size() - 1 )
+       throw new InvalidGeometryException("Invalid Point (duplicate) at index #" + i + " in the LinearRing coordinates");
+      else 
+       hset.add(point);
+*/       
     }
+    
     final List<Number> firstPoint = (List<Number>) points.get(0);
     final List<Number> lastPoint = (List<Number>) points.get(points.size() - 1);
     if (firstPoint.size() != lastPoint.size() || //
@@ -213,6 +232,9 @@ public abstract class Geometry implements Typed {
       throw new InvalidGeometryException("Coordinates are expected to be an array");
     }
     @SuppressWarnings("unchecked") final List<Object> linearRings = (List<Object>) raw;
+    if(linearRings.size() == 0) {
+      throw new InvalidGeometryException("Polygon must have at least one LinearRing");
+    }
     for (int i = 0; i < linearRings.size(); i++) {
       final Object linearRing = linearRings.get(i);
       if (!(linearRing instanceof List)) {
@@ -233,6 +255,9 @@ public abstract class Geometry implements Typed {
       throw new InvalidGeometryException("Coordinates are expected to be an array");
     }
     @SuppressWarnings("unchecked") final List<Object> polygons = (List<Object>) raw;
+    if(polygons.size() == 0) {
+      throw new InvalidGeometryException("MultiPolygon must have at least one Polygon");
+    }
     for (int i = 0; i < polygons.size(); i++) {
       final Object polygon = polygons.get(i);
       if (!(polygon instanceof List)) {
@@ -257,7 +282,7 @@ public abstract class Geometry implements Typed {
 
   @JsonIgnore
   @SuppressWarnings("WeakerAccess")
-  public com.vividsolutions.jts.geom.Geometry getJTSGeometry() {
+  public org.locationtech.jts.geom.Geometry getJTSGeometry() {
     if (geomCache == null) {
       geomCache = convertToJTSGeometry();
     }
@@ -267,7 +292,7 @@ public abstract class Geometry implements Typed {
 
   // TODO: Please fix the "isExterior" parameter that is currently unused (either use it or remove it)
 
-  protected abstract com.vividsolutions.jts.geom.Geometry convertToJTSGeometry();
+  protected abstract org.locationtech.jts.geom.Geometry convertToJTSGeometry();
 
   public abstract BBox calculateBBox();
 

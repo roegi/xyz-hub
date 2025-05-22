@@ -1,0 +1,7 @@
+---
+recipes:
+  - name: contract
+    replace:
+      - type: value
+        path: servers.0.url
+        replace: ${SERVER_URL}

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,21 +19,23 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.NO_CONTENT;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.restassured.RestAssured.given;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 
+import com.here.xyz.hub.Config;
+import com.here.xyz.hub.Service;
 import com.here.xyz.hub.rest.admin.AdminMessage;
 import com.here.xyz.hub.rest.admin.Node;
 import com.here.xyz.hub.rest.admin.messages.TestMessage;
-import com.jayway.restassured.response.ResponseBodyExtractionOptions;
-import com.jayway.restassured.response.ValidatableResponse;
-import com.jayway.restassured.specification.RequestSpecification;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.restassured.response.ResponseBodyExtractionOptions;
+import io.restassured.response.ValidatableResponse;
+import io.restassured.specification.RequestSpecification;
 import io.vertx.core.json.Json;
 import io.vertx.core.json.JsonObject;
 import java.util.HashSet;
@@ -46,12 +48,18 @@ import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
+@SuppressWarnings("unused")
 public class AdminMessagesApiIT extends RestAssuredTest {
 
   private static ExecutorService threadPool;
 
   @BeforeClass
   public static void setup() {
+    //Mock necessary configuration values
+    Service.configuration = new Config();
+    Service.configuration.REMOTE_FUNCTION_REQUEST_TIMEOUT = 26;
+    Service.configuration.INSTANCE_COUNT = 1;
+
     threadPool = new ForkJoinPool(10);
   }
 
@@ -89,7 +97,6 @@ public class AdminMessagesApiIT extends RestAssuredTest {
         .accept(APPLICATION_JSON)
         .when()
         .get("/static/" + tmpFile)
-        .prettyPeek()
         .then()
         .statusCode(OK.code())
         .body("content", equalTo(content))
@@ -143,7 +150,6 @@ public class AdminMessagesApiIT extends RestAssuredTest {
     //String nodeId = response.path("receiver.id");
     //String nodeIp = response.path("receiver.ip");
     Node node = JsonObject.mapFrom(bcResponse.path("receiver")).mapTo(Node.class);
-    ;
 
     //Send a message dedicated to the node
     now = System.currentTimeMillis();
@@ -169,7 +175,6 @@ public class AdminMessagesApiIT extends RestAssuredTest {
               .accept(APPLICATION_JSON)
               .when()
               .get("/static/" + tmpFile)
-              .prettyPeek()
               .then();
 
           if (r.extract().statusCode() == OK.code()) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,14 +19,15 @@
 
 package com.here.xyz.hub.task;
 
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
-import com.here.xyz.events.CountFeaturesEvent;
-import com.here.xyz.events.DeleteFeaturesByTagEvent;
+import com.here.xyz.events.ContextAwareEvent.SpaceContext;
 import com.here.xyz.events.Event;
 import com.here.xyz.events.GetFeaturesByBBoxEvent;
 import com.here.xyz.events.GetFeaturesByGeometryEvent;
@@ -38,9 +39,10 @@ import com.here.xyz.events.LoadFeaturesEvent;
 import com.here.xyz.events.ModifyFeaturesEvent;
 import com.here.xyz.events.ModifySpaceEvent;
 import com.here.xyz.events.ModifySpaceEvent.Operation;
-import com.here.xyz.events.QueryEvent;
+import com.here.xyz.events.ModifySubscriptionEvent;
 import com.here.xyz.events.SearchForFeaturesEvent;
 import com.here.xyz.hub.Service;
+import com.here.xyz.hub.auth.Authorization;
 import com.here.xyz.hub.auth.FeatureAuthorization;
 import com.here.xyz.hub.connectors.RpcClient;
 import com.here.xyz.hub.connectors.models.Connector;
@@ -49,27 +51,42 @@ import com.here.xyz.hub.connectors.models.Space.CacheProfile;
 import com.here.xyz.hub.rest.Api;
 import com.here.xyz.hub.rest.ApiParam;
 import com.here.xyz.hub.rest.ApiResponseType;
-import com.here.xyz.hub.rest.HttpException;
 import com.here.xyz.hub.task.FeatureTaskHandler.InvalidStorageException;
-import com.here.xyz.hub.task.ModifyOp.Entry;
+import com.here.xyz.hub.task.TaskPipeline.C1;
+import com.here.xyz.hub.task.TaskPipeline.C2;
 import com.here.xyz.hub.task.TaskPipeline.Callback;
 import com.here.xyz.models.geojson.implementation.Feature;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
-import com.here.xyz.models.geojson.implementation.Properties;
+import com.here.xyz.models.geojson.implementation.Geometry;
+import com.here.xyz.models.hub.FeatureModificationList.ConflictResolution;
+import com.here.xyz.models.hub.FeatureModificationList.IfExists;
+import com.here.xyz.models.hub.FeatureModificationList.IfNotExists;
 import com.here.xyz.responses.XyzResponse;
+import com.here.xyz.util.geo.GeometryValidator;
+import com.here.xyz.util.service.HttpException;
 import io.vertx.core.AsyncResult;
 import io.vertx.ext.web.RoutingContext;
 import java.nio.charset.Charset;
-import java.util.HashMap;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> extends Task<T, X> {
+public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?>> extends Task<T, X> {
+
+  private static final Logger logger = LogManager.getLogger();
 
   /**
    * The space for this operation.
    */
   public Space space;
+
+  /**
+   * The spaces being extended by {@link #space} (if existing).
+   */
+  public Collection<Space> extendedSpaces;
 
   /**
    * The storage connector to be used for this operation.
@@ -79,6 +96,7 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
   /**
    * The response.
    */
+  @SuppressWarnings("rawtypes")
   private XyzResponse response;
 
   /**
@@ -86,34 +104,66 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
    */
   private String cacheKey;
 
+  /**
+   * The number of bytes the request body is / was having initially.
+   */
+  public final int requestBodySize;
+
+  public static final class FeatureKey {
+
+    public static final String ID = "id";
+    public static final String TYPE = "type";
+    public static final String BBOX = "bbox";
+    public static final String PROPERTIES = "properties";
+    public static final String SPACE = "space";
+    public static final String CREATED_AT = "createdAt";
+    public static final String UPDATED_AT = "updatedAt";
+    public static final String VERSION = "version";
+    public static final String AUTHOR = "author";
+  }
+
   private FeatureTask(T event, RoutingContext context, ApiResponseType responseType, boolean skipCache) {
+    this(event, context, responseType, skipCache, 0);
+  }
+
+  private FeatureTask(T event, RoutingContext context, ApiResponseType responseType, boolean skipCache, int requestBodySize) {
     super(event, context, responseType, skipCache);
-    event.withStreamId(getMarker().getName())
-        .withSpace(context.pathParam(ApiParam.Path.SPACE_ID));
+    event.setStreamId(getMarker().getName());
+
+    if (context.pathParam(ApiParam.Path.SPACE_ID) != null) {
+      event.setSpace(context.pathParam(ApiParam.Path.SPACE_ID));
+    }
+    this.requestBodySize = requestBodySize;
   }
 
   public CacheProfile getCacheProfile() {
     if (space == null || storage == null) {
       return null;
     }
-    return space.getCacheProfile(skipCache, storage.capabilities.enableAutoCache);
+    return space.getCacheProfile(skipCache, storage.capabilities.enableAutoCache, readOnlyAccess);
   }
 
   @Override
-  public String getCacheKey() {
-    if (cacheKey != null) {
+  String getCacheKey() {
+    if (cacheKey != null)
       return cacheKey;
-    }
+
     try {
       //noinspection UnstableApiUsage
-      cacheKey = Hashing.murmur3_128().newHasher()
+      Hasher hasher = Hashing.murmur3_128().newHasher()
           .putString(getEvent().getCacheString(), Charset.defaultCharset())
-          .putString(responseType.toString(), Charset.defaultCharset())
-          .putLong(space.contentUpdatedAt)
-          .hash()
-          .toString();
-      return cacheKey;
-    } catch (JsonProcessingException e) {
+          .putString(responseType.toString(), Charset.defaultCharset());
+
+      if (!readOnlyAccess) {
+        hasher.putLong(space.getContentUpdatedAt());
+        if (space.getExtension() != null && extendedSpaces != null)
+          extendedSpaces.forEach(extendedSpace -> hasher.putLong(extendedSpace.getContentUpdatedAt()));
+      }
+
+      return cacheKey = hasher.hash().toString();
+    }
+    catch (JsonProcessingException e) {
+      logger.error(getMarker(), "Error creating cache key.", e);
       return null;
     }
   }
@@ -122,11 +172,11 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
    * The hook which will be called once all pre-processors have been called. The hook will get the pre-processed event as parameter. The
    * hook will *not* be called if no pre-processors have been defined for the space. The hook may be overridden in sub-classes.
    */
-  public void onPreProcessed(Event event) {
+  public void onPreProcessed(T event) {
   }
 
   @Override
-  public String etag() {
+  public String getEtag() {
     if (response == null) {
       return null;
     }
@@ -162,6 +212,7 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
    * @return the response feature collection, if the response is a feature collection.
    * @deprecated please rather use {@link #getResponse()}
    */
+  @Deprecated
   public FeatureCollection responseCollection() {
     if (response instanceof FeatureCollection) {
       return (FeatureCollection) response;
@@ -169,7 +220,16 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
     return null;
   }
 
-  abstract static class ReadQuery<T extends QueryEvent, X extends FeatureTask<T, ?>> extends FeatureTask<T, X> {
+  private static RpcClient getRpcClient(Connector refConnector) throws HttpException {
+    try {
+      return RpcClient.getInstanceFor(refConnector);
+    }
+    catch (IllegalStateException e) {
+      throw new HttpException(BAD_GATEWAY, "Connector not ready.");
+    }
+  }
+
+  abstract static class ReadQuery<T extends com.here.xyz.events.SearchForFeaturesEvent<?>, X extends FeatureTask<T, ?>> extends FeatureTask<T, X> {
 
     private ReadQuery(T event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
@@ -185,6 +245,7 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
   }
 
   public static class GeometryQuery extends ReadQuery<GetFeaturesByGeometryEvent, GeometryQuery> {
+
     public final String refSpaceId;
     private final String refFeatureId;
     public Space refSpace;
@@ -198,21 +259,26 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
     }
 
     @Override
-    public TaskPipeline<GeometryQuery> getPipeline() {
+    public TaskPipeline<GeometryQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::resolveVersionRef)
           .then(this::resolveRefSpace)
           .then(this::resolveRefConnector)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
-          .then(this::loadObject)
+          .then(this::loadReferenceFeature)
           .then(this::verifyResourceExists)
+          .then(FeatureTaskHandler::checkImmutability)
           .then(FeatureTaskHandler::validate)
-          .then(FeatureTaskHandler::invoke);
+          .then(FeatureTaskHandler::readCache)
+          .then(FeatureTaskHandler::invoke)
+          .then(FeatureTaskHandler::writeCache);
     }
 
     private void verifyResourceExists(GeometryQuery task, Callback<GeometryQuery> callback) {
-      if (this.getEvent().getGeometry() == null) {
-        callback.exception(new HttpException(NOT_FOUND, "The 'refFeatureId' : '"+refFeatureId+"' does not exist."));
+      if (this.getEvent().getGeometry() == null && this.getEvent().getH3Index() == null) {
+        callback.exception(new HttpException(NOT_FOUND, "The 'refFeatureId' : '" + refFeatureId + "' does not exist."));
       } else {
         callback.call(task);
       }
@@ -220,7 +286,7 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
 
     private void resolveRefConnector(final GeometryQuery gq, final Callback<GeometryQuery> c) {
       try {
-        if(refSpace == null || (refSpace != null && refSpace.getStorage().getId() == space.getStorage().getId())) {
+        if (refSpace == null || refSpace.getStorage().getId().equals(space.getStorage().getId())) {
           refConnector = storage;
           c.call(gq);
           return;
@@ -245,57 +311,52 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
           return;
         }
         //Load the space definition.
-        Service.spaceConfigClient.get(getMarker(), refSpaceId, arSpace -> {
-          if (arSpace.failed()) {
-            c.exception(new HttpException(BAD_REQUEST, "'RefSpace' : '"+refSpaceId+"' does not exist!", arSpace.cause()));
-            return;
-          }
-          refSpace = arSpace.result();
-
-          if(refSpace == null) {
-            c.exception(new HttpException(BAD_REQUEST, "RefSpace : '"+refSpaceId+"'  not exist!", arSpace.cause()));
-            return;
-          }
-
-          if (refSpace != null) {
-            gq.getEvent().setParams(gq.space.getStorage().getParams());
-          }
-          c.call(gq);
-        });
-      } catch (Exception e) {
-        c.exception(new HttpException(INTERNAL_SERVER_ERROR, "Unable to load the space definition", e));
+        Service.spaceConfigClient.get(getMarker(), refSpaceId)
+            .onFailure(t -> c.exception(new HttpException(BAD_REQUEST, "The resource ID '" + refSpaceId + "' does not exist!", t)))
+            .onSuccess(space -> {
+              refSpace = space;
+              if (refSpace == null)
+                c.exception(new HttpException(BAD_REQUEST, "The resource ID '" + refSpaceId + "' does not exist!"));
+              else if (!refSpace.isActive())
+                c.exception(new HttpException(BAD_REQUEST, "The resource ID '" + refSpaceId + "' is not active."));
+              else {
+                gq.getEvent().setParams(gq.space.getStorage().getParams());
+                c.call(gq);
+              }
+            });
+      }
+      catch (Exception e) {
+        c.exception(new HttpException(INTERNAL_SERVER_ERROR, "Unable to load the resource definition.", e));
       }
     }
 
     @SuppressWarnings("serial")
-    private void loadObject(final GeometryQuery gq, final Callback<GeometryQuery> c) {
-      if(gq.getEvent().getGeometry() != null) {
-        c.call(this);
+    private void loadReferenceFeature(final GeometryQuery query,
+        final Callback<GeometryQuery> callback) {
+      if (query.getEvent().getGeometry() != null || query.getEvent().getH3Index() != null) {
+        callback.call(this);
         return;
       }
 
-      final LoadFeaturesEvent event = new LoadFeaturesEvent()
+      final GetFeaturesByIdEvent event = new GetFeaturesByIdEvent()
           .withStreamId(getMarker().getName())
           .withSpace(refSpaceId)
-          .withParams(this.refSpace.getStorage().getParams())
-          .withIdsMap(new HashMap<String,String>() {{
-            put(refFeatureId, null);
-          }});
+          .withParams(refSpace.getStorage().getParams())
+          .withIds(Collections.singletonList(refFeatureId));
 
       try {
-        RpcClient.getInstanceFor(refConnector).execute(getMarker(), event, r -> processLoadEvent(c, event, r));
-      } catch (Exception e) {
-        c.exception(e);
+        getRpcClient(refConnector).execute(getMarker(), event,
+            response -> processGetRefFeatureResponse(callback, response), refSpace);
+      }
+      catch (Exception e) {
+        logger.warn(query.getMarker(), "Error trying to process LoadFeaturesEvent.", e);
+        callback.exception(e);
       }
     }
 
-    void processLoadEvent(Callback<GeometryQuery> callback, LoadFeaturesEvent event, AsyncResult<XyzResponse> r) {
+    void processGetRefFeatureResponse(Callback<GeometryQuery> callback, AsyncResult<XyzResponse> r) {
       if (r.failed()) {
-        if (r.cause() instanceof Exception) {
-          callback.exception((Exception) r.cause());
-        } else {
-          callback.exception(new Exception(r.cause()));
-        }
+        callback.exception(r.cause() instanceof Exception ? r.cause() : new Exception(r.cause()));
         return;
       }
 
@@ -308,27 +369,33 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
         final FeatureCollection collection = (FeatureCollection) response;
         final List<Feature> features = collection.getFeatures();
 
-        if(features.size() == 1)
-         this.getEvent().setGeometry(features.get(0).getGeometry());
-
+        if (features.size() == 1) {
+          Geometry geometry = features.get(0).getGeometry();
+          GeometryValidator.validateGeometry(geometry, getEvent().getRadius());
+          getEvent().setGeometry(features.get(0).getGeometry());
+        }
         callback.call(this);
-      } catch (Exception e) {
+      }
+      catch (Exception e) {
         callback.exception(e);
       }
     }
   }
 
-  public static class BBoxQuery extends ReadQuery<GetFeaturesByBBoxEvent, BBoxQuery> {
+  public static class BBoxQuery extends ReadQuery<GetFeaturesByBBoxEvent<?>, BBoxQuery> {
 
     public BBoxQuery(GetFeaturesByBBoxEvent event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
     }
 
     @Override
-    public TaskPipeline<BBoxQuery> getPipeline() {
+    public TaskPipeline<BBoxQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
+          .then(FeatureTaskHandler::checkImmutability)
           .then(FeatureTaskHandler::validate)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
@@ -337,20 +404,47 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
   }
 
   public static class TileQuery extends ReadQuery<GetFeaturesByTileEvent, TileQuery> {
+
+    /**
+     * A local copy of some transformation-relevant properties from the event object.
+     * NOTE: The event object is not in memory in the response-phase anymore.
+     *
+     * @see Task#consumeEvent()
+     */
+    TransformationContext transformationContext;
+
     public TileQuery(GetFeaturesByTileEvent event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
+      transformationContext = new TransformationContext(event.getX(), event.getY(), event.getLevel(), event.getMargin());
     }
 
     @Override
-    public TaskPipeline<TileQuery> getPipeline() {
+    public TaskPipeline<TileQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
+          .then(FeatureTaskHandler::checkImmutability)
           .then(FeatureTaskHandler::validate)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
           .then(FeatureTaskHandler::transformResponse)
           .then(FeatureTaskHandler::writeCache);
+    }
+
+    static class TransformationContext {
+      TransformationContext(int x, int y, int level, int margin) {
+        this.x = x;
+        this.y = y;
+        this.level = level;
+        this.margin = margin;
+      }
+
+      int x;
+      int y;
+      int level;
+      int margin;
     }
   }
 
@@ -360,10 +454,13 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
       super(event, context, apiResponseTypeType, skipCache);
     }
 
-    public TaskPipeline<IdsQuery> getPipeline() {
+    public TaskPipeline<IdsQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
+          .then(FeatureTaskHandler::checkImmutability)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
           .then(FeatureTaskHandler::convertResponse)
@@ -378,10 +475,13 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
     }
 
     @Override
-    public TaskPipeline<IterateQuery> getPipeline() {
+    public TaskPipeline<IterateQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
+          .then(FeatureTaskHandler::checkImmutability)
           .then(FeatureTaskHandler::validate)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
@@ -389,71 +489,45 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
     }
   }
 
-  public static class SearchQuery extends ReadQuery<SearchForFeaturesEvent, SearchQuery> {
-    public SearchQuery(SearchForFeaturesEvent event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
+  public static class SearchQuery extends ReadQuery<SearchForFeaturesEvent<?>, SearchQuery> {
+
+    public SearchQuery(SearchForFeaturesEvent<?> event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
     }
 
     @Override
-    public TaskPipeline<SearchQuery> getPipeline() {
+    public TaskPipeline<SearchQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
+          .then(FeatureTaskHandler::checkImmutability)
           .then(FeatureTaskHandler::validate)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
           .then(FeatureTaskHandler::writeCache);
-    }
-  }
-
-  //TODO: Remove that implementation finally
-  @Deprecated
-  public static class CountQuery extends ReadQuery<CountFeaturesEvent, CountQuery> {
-
-    public CountQuery(CountFeaturesEvent event, RoutingContext context, ApiResponseType apiResponseTypeType) {
-      super(event, context, apiResponseTypeType);
-    }
-
-    @Override
-    public TaskPipeline<CountQuery> getPipeline() {
-      return TaskPipeline.create(this)
-          .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureAuthorization::authorize)
-          .then(FeatureTaskHandler::invoke);
     }
   }
 
   public static class GetStatistics extends FeatureTask<GetStatisticsEvent, GetStatistics> {
+    final public SpaceContext spaceContext;
 
     public GetStatistics(GetStatisticsEvent event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
+      spaceContext = event.getContext();
     }
 
     @Override
-    public TaskPipeline<GetStatistics> getPipeline() {
+    public TaskPipeline<GetStatistics> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
           .then(FeatureTaskHandler::convertResponse)
           .then(FeatureTaskHandler::writeCache);
-    }
-  }
-
-  public static class DeleteOperation extends FeatureTask<DeleteFeaturesByTagEvent, DeleteOperation> {
-
-    public DeleteOperation(DeleteFeaturesByTagEvent event, RoutingContext context, ApiResponseType apiResponseTypeType) {
-      super(event, context, apiResponseTypeType, true);
-    }
-
-    @Override
-    public TaskPipeline<DeleteOperation> getPipeline() {
-      return TaskPipeline.create(this)
-          .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::checkPreconditions)
-          .then(FeatureAuthorization::authorize)
-          .then(FeatureTaskHandler::invoke);
     }
   }
 
@@ -468,14 +542,29 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
 
     //That hook will be called only if there were pre-processors which have been called and it sets the manipulatedSpaceDefinition value
     @Override
-    public void onPreProcessed(Event event) {
-      manipulatedOp = ((ModifySpaceEvent) event).getOperation();
+    public void onPreProcessed(ModifySpaceEvent event) {
+      manipulatedOp = event.getOperation();
       //FIXME: Don't take the incoming spaceDefinition as is. Instead only merge the non-admin top-level properties and the connector config of the according processor (Processors should NOT be able to manipulate connector registrations of other connections at the space)
-      manipulatedSpaceDefinition = ((ModifySpaceEvent) event).getSpaceDefinition();
+      manipulatedSpaceDefinition = event.getSpaceDefinition();
     }
 
     @Override
-    public TaskPipeline<ModifySpaceQuery> getPipeline() {
+    public TaskPipeline<ModifySpaceQuery> createPipeline() {
+      return TaskPipeline.create(this)
+          .then(FeatureTaskHandler::resolveSpace)
+          .then(SpaceTaskHandler::invokeConditionally);
+    }
+  }
+
+  public static class ModifySubscriptionQuery extends FeatureTask<ModifySubscriptionEvent, ModifySubscriptionQuery> {
+
+    ModifySubscriptionQuery(ModifySubscriptionEvent event, RoutingContext context, ApiResponseType apiResponseTypeType) {
+      super(event, context, apiResponseTypeType, true);
+    }
+
+    @Override
+    public TaskPipeline<ModifySubscriptionQuery> createPipeline() {
+
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
           .then(FeatureTaskHandler::invoke);
@@ -484,171 +573,83 @@ public abstract class FeatureTask<T extends Event, X extends FeatureTask<T, ?>> 
 
   public static class ConditionalOperation extends FeatureTask<ModifyFeaturesEvent, ConditionalOperation> {
 
-    public final ModifyFeatureOp modifyOp;
-    private final boolean requireResourceExists;
+    public ModifyFeatureOp modifyOp;
+    public IfNotExists ifNotExists;
+    public IfExists ifExists;
+    public boolean transactional;
+    public ConflictResolution conflictResolution;
+    public List<Feature> unmodifiedFeatures;
+    public final boolean requireResourceExists;
     public List<String> addTags;
     public List<String> removeTags;
     public String prefixId;
-    private Map<Object, Integer> positionById;
-    private LoadFeaturesEvent loadFeaturesEvent;
+    public Map<Object, Integer> positionById;
+    public LoadFeaturesEvent loadFeaturesEvent;
+    public boolean hasNonModified;
+
+    public String author;
 
     public ConditionalOperation(ModifyFeaturesEvent event, RoutingContext context, ApiResponseType apiResponseTypeType,
-        ModifyFeatureOp modifyOp,
-        boolean requireResourceExists) {
-      super(event, context, apiResponseTypeType, true);
+        ModifyFeatureOp modifyOp, boolean requireResourceExists, int requestBodySize) {
+      super(event, context, apiResponseTypeType, true, requestBodySize);
       this.modifyOp = modifyOp;
       this.requireResourceExists = requireResourceExists;
     }
 
+    public ConditionalOperation(ModifyFeaturesEvent event, RoutingContext context, ApiResponseType apiResponseTypeType,
+        IfNotExists ifNotExists, IfExists ifExists, boolean transactional, ConflictResolution conflictResolution, boolean requireResourceExists, int requestBodySize) {
+      this(event, context, apiResponseTypeType, null, requireResourceExists, requestBodySize);
+      this.ifNotExists = ifNotExists;
+      this.ifExists = ifExists;
+      this.transactional = transactional;
+      this.conflictResolution = conflictResolution;
+    }
+
     @Override
-    public TaskPipeline<ConditionalOperation> getPipeline() {
+    public TaskPipeline<ConditionalOperation> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(FeatureTaskHandler::registerRequestMemory)
+          .then(FeatureTaskHandler::throttle)
+          .then(FeatureTaskHandler::injectSpaceParams)
           .then(FeatureTaskHandler::checkPreconditions)
+          .then(FeatureTaskHandler::prepareModifyFeatureOp)
           .then(FeatureTaskHandler::preprocessConditionalOp)
-          .then(this::loadObjects)
-          .then(this::verifyResourceExists)
+          .then(FeatureTaskHandler::loadObjects)
+          .then(FeatureTaskHandler::verifyResourceExists)
           .then(FeatureTaskHandler::updateTags)
           .then(FeatureTaskHandler::processConditionalOp)
+          .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::enforceUsageQuotas)
+          .then(FeatureTaskHandler::extractUnmodifiedFeatures)
+          .then(this::cleanup)
           .then(FeatureTaskHandler::invoke);
     }
 
-    private void verifyResourceExists(ConditionalOperation task, Callback<ConditionalOperation> callback) {
-      if (task.requireResourceExists && task.modifyOp.entries.get(0).head == null) {
-        callback.exception(new HttpException(NOT_FOUND, "The requested resource does not exist."));
-      } else {
-        callback.call(task);
-      }
+    @Override
+    public void execute(C1<ConditionalOperation> onSuccess, final C2<ConditionalOperation, Throwable> onException) {
+      C1<ConditionalOperation> wrappedSuccessHandler = task -> {
+        requestCompleted(task);
+        onSuccess.call(task);
+      };
+      C2<ConditionalOperation, Throwable> wrappedExceptionHandler = (task, ex) -> {
+        requestCompleted(task);
+        onException.call(task, ex);
+      };
+      super.execute(wrappedSuccessHandler, wrappedExceptionHandler);
     }
 
-    private void loadObjects(final ConditionalOperation s, final Callback<ConditionalOperation> c) {
-      final LoadFeaturesEvent event = toLoadFeaturesEvent();
-      if (event == null) {
-        c.call(this);
-        return;
-      }
-      FeatureTaskHandler.setAdditionalEventProps(s, s.storage, event);
-      try {
-        RpcClient.getInstanceFor(s.storage).execute(getMarker(), event, r -> processLoadEvent(c, event, r));
-      } catch (Exception e) {
-        c.exception(e);
-      }
+    private void requestCompleted(FeatureTask task) {
+      if (task.storage != null)
+        FeatureTaskHandler.deregisterRequestMemory(task.storage.id, task.requestBodySize);
     }
 
-    LoadFeaturesEvent toLoadFeaturesEvent() {
-      if (loadFeaturesEvent != null) {
-        return loadFeaturesEvent;
-      }
-
-      if (modifyOp.entries.size() == 0) {
-        return null;
-      }
-
-      final HashMap<String, String> idsMap = new HashMap<>();
-      for (Entry<Feature, Feature, Feature> entry : modifyOp.entries) {
-        if (entry.input.getId() != null) {
-          String uuid = null;
-          final Properties properties = entry.input.getProperties();
-          if (properties != null && properties.getXyzNamespace() != null) {
-            uuid = properties.getXyzNamespace().getUuid();
-          }
-          idsMap.put(entry.input.getId(), uuid);
-        }
-      }
-      if (idsMap.size() == 0) {
-        return null;
-      }
-
-      final LoadFeaturesEvent event = new LoadFeaturesEvent()
-          .withStreamId(getMarker().getName())
-          .withSpace(space.getId())
-          .withParams(space.getStorage().getParams())
-          .withIdsMap(idsMap);
-
-      loadFeaturesEvent = event;
-      return event;
-    }
-
-    void processLoadEvent(Callback<ConditionalOperation> callback, LoadFeaturesEvent event, AsyncResult<XyzResponse> r) {
-      final Map<String, String> idsMap = event.getIdsMap();
-      if (r.failed()) {
-        if (r.cause() instanceof Exception) {
-          callback.exception((Exception) r.cause());
-        } else {
-          callback.exception(new Exception(r.cause()));
-        }
-        return;
-      }
-
-      try {
-        final XyzResponse response = r.result();
-        if (!(response instanceof FeatureCollection)) {
-          callback.exception(Api.responseToHttpException(response));
-          return;
-        }
-        final FeatureCollection collection = (FeatureCollection) response;
-        final List<Feature> features = collection.getFeatures();
-
-        // For each input feature there could be 0, 1(head state) or 2 (head state and base state) features in the response
-        if (features == null) {
-          callback.call(this);
-          return;
-        }
-
-        for (final Feature feature : features) {
-          final String id = feature.getId();
-
-          // The uuid the client has requested.
-          final String requestedUuid = idsMap.get(id);
-
-          int position = getPositionForId(feature.getId());
-          if (position == -1) { // There is no object with this ID in the input states
-            continue;
-          }
-
-          if (feature.getProperties() == null || feature.getProperties().getXyzNamespace() == null) {
-            throw new IllegalStateException("Received a feature with missing space namespace properties for object '" + id + "'");
-          }
-
-          String uuid = feature.getProperties().getXyzNamespace().getUuid();
-
-          // Set the head state( i.e. the latest version in the database )
-          if (modifyOp.entries.get(position).head == null || uuid != null && !uuid.equals(requestedUuid)) {
-            modifyOp.entries.get(position).head = feature;
-          }
-
-          // Set the base state( i.e. the original version that the user was editing )
-          // Note: The base state must not be empty. If the connector doesn't support history and doesn't return the base state, use the
-          // head state instead.
-          if (modifyOp.entries.get(position).base == null || uuid != null && uuid.equals(requestedUuid)) {
-            modifyOp.entries.get(position).base = feature;
-          }
-        }
-
-        callback.call(this);
-      } catch (Exception e) {
-        callback.exception(e);
-      }
-    }
-
-    int getPositionForId(Object id) {
-      if (id == null) {
-        return -1;
-      }
-
-      if (positionById == null) {
-        positionById = new HashMap<>();
-        for (int i = 0; i < modifyOp.entries.size(); i++) {
-          final Feature input = modifyOp.entries.get(i).input;
-          if (input != null && input.getId() != null) {
-            positionById.put(input.getId(), i);
-          }
-        }
-      }
-
-      return positionById.get(id) == null ? -1 : positionById.get(id);
+    @Override
+    protected <X extends Task<?, X>> void cleanup(X task, Callback<X> callback) {
+      super.cleanup(task, callback);
+      modifyOp = null;
+      callback.call(task);
     }
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2022 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,63 +20,26 @@
 package com.here.xyz.events;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.fasterxml.jackson.annotation.JsonTypeName;
-import com.here.xyz.models.geojson.coordinates.BBox;
-import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class SpatialQueryEvent<T extends SpatialQueryEvent> extends SearchForFeaturesEvent<T> {
+public abstract class SpatialQueryEvent<T extends SpatialQueryEvent> extends SearchForFeaturesEvent<T> {
 
-  private long simplificationLevel;
-  private String clusteringType;
-  private Map<String, Object> clusteringParams;
+  private boolean clip;
 
   @SuppressWarnings("unused")
-  public long getSimplificationLevel() {
-    return this.simplificationLevel;
+  public Boolean getClip() {
+    return this.clip;
   }
 
   @SuppressWarnings("WeakerAccess")
-  public void setSimplificationLevel(long simplificationLevel) {
-    this.simplificationLevel = simplificationLevel;
+  public void setClip(Boolean clip) {
+    this.clip = clip;
   }
 
   @SuppressWarnings("unused")
-  public T withSimplificationLevel(long simplificationLevel) {
-    setSimplificationLevel(simplificationLevel);
+  public T withClip(boolean clip) {
+    setClip(clip);
     //noinspection unchecked
-    return (T) this;
-  }
-
-  @SuppressWarnings("unused")
-  public String getClusteringType() {
-    return this.clusteringType;
-  }
-
-  @SuppressWarnings("WeakerAccess")
-  public void setClusteringType(String clusteringType) {
-    this.clusteringType = clusteringType;
-  }
-
-  @SuppressWarnings("unused")
-  public T withClusteringType(String clusteringType) {
-    setClusteringType(clusteringType);
-    //noinspection unchecked
-    return (T) this;
-  }
-
-  @SuppressWarnings("unused")
-  public Map<String, Object> getClusteringParams() {
-    return this.clusteringParams;
-  }
-
-  public void setClusteringParams(Map<String, Object> clusteringParams) {
-    this.clusteringParams = clusteringParams;
-  }
-
-  @SuppressWarnings({"unused", "unchecked"})
-  public T withClusteringParams(Map<String, Object> clusteringParams) {
-    this.clusteringParams = clusteringParams;
     return (T) this;
   }
 }

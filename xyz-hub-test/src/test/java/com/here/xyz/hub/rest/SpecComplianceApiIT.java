@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,19 +19,18 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_GEO_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.UNAUTHORIZED;
 import static io.netty.handler.codec.rtsp.RtspResponseStatuses.NOT_FOUND;
+import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.isEmptyOrNullString;
 import static org.hamcrest.Matchers.not;
 
-import com.jayway.restassured.http.Method;
-import com.jayway.restassured.response.Response;
-import com.jayway.restassured.specification.RequestSpecification;
-import java.io.IOException;
+import io.restassured.http.Method;
+import io.restassured.response.Response;
+import io.restassured.specification.RequestSpecification;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -91,7 +90,6 @@ public class SpecComplianceApiIT extends TestSpaceWithFeature {
     checkNotFound(Method.GET, APPLICATION_GEO_JSON, "/spaces/non-existing-path/search");
     checkNotFound(Method.GET, APPLICATION_GEO_JSON, "/spaces/non-existing-path/iterate");
     checkNotFound(Method.DELETE, APPLICATION_JSON, "/spaces/non-existing-path/features?id=non-existing-feature");
-    checkNotFound(Method.PATCH, APPLICATION_GEO_JSON, "/spaces/x-psql-test/features/non-existing-path");
     checkNotFound(Method.DELETE, APPLICATION_JSON, "/spaces/x-psql-test/features/non-existing-path");
   }
 

@@ -1,0 +1,21 @@
+{
+  "type":"Feature",
+  "id":"aa",
+  "geometry":{
+    "type":"Point",
+    "coordinates":[
+      -2.960847,
+      53.430828
+    ]
+  },
+  "properties":{
+    "@ns:com:here:xyz":{
+      "space":"2aGEUZpZ",
+      "createdAt":1579685281744,
+      "updatedAt":1579685281744,
+      "version": 0,
+      "tags":[ "tag1"]
+    },
+    "name":"Anfield"
+  }
+}

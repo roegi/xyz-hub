@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,13 +19,11 @@
 
 package com.here.xyz.hub.cache;
 
-import io.vertx.core.Handler;
+import io.vertx.core.Future;
 
 public interface CacheClient {
 
-	void get(String key, Handler<String> handler);
-
-	void getBinary(String key, Handler<byte[]> handler);
+	Future<byte[]> get(String key);
 
 	/**
 	 *
@@ -33,15 +31,9 @@ public interface CacheClient {
 	 * @param value
 	 * @param ttl The live time of the cache-record in seconds
 	 */
-	void set(String key, String value, long ttl);
-
-	void setBinary(String key, byte[] value, long ttl);
+	void set(String key, byte[] value, long ttl);
 
 	void remove(String key);
-
-	static CacheClient create() {
-		return RedisCacheClient.create();
-	}
 
 	void shutdown();
 

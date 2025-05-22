@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,47 +19,69 @@
 
 package com.here.xyz.hub.connectors;
 
+import static com.here.xyz.events.GetFeaturesByTileEvent.ResponseType.MVT;
+import static com.here.xyz.events.GetFeaturesByTileEvent.ResponseType.MVT_FLATTENED;
+import static com.here.xyz.util.service.rest.TooManyRequestsException.ThrottlingReason.CONNECTOR;
+import static io.netty.handler.codec.http.HttpHeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.CONFLICT;
+import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.GATEWAY_TIMEOUT;
-import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_IMPLEMENTED;
 import static io.netty.handler.codec.rtsp.RtspResponseStatuses.REQUEST_ENTITY_TOO_LARGE;
 
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.exc.InvalidTypeIdException;
+import com.google.common.io.ByteStreams;
+import com.here.xyz.Payload;
 import com.here.xyz.Typed;
 import com.here.xyz.XyzSerializable;
 import com.here.xyz.connectors.RelocationClient;
 import com.here.xyz.events.Event;
+import com.here.xyz.events.GetFeaturesByTileEvent;
 import com.here.xyz.events.RelocatedEvent;
 import com.here.xyz.hub.Service;
+import com.here.xyz.hub.connectors.RemoteFunctionClient.FunctionCall;
 import com.here.xyz.hub.connectors.models.Connector;
-import com.here.xyz.hub.rest.HttpException;
-import com.here.xyz.hub.util.logging.Logging;
-import com.here.xyz.models.geojson.implementation.XyzError;
+import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig;
+import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig.Http;
+import com.here.xyz.hub.connectors.models.Space;
+import com.here.xyz.hub.rest.Api;
+import com.here.xyz.models.geojson.implementation.FeatureCollection;
+import com.here.xyz.responses.BinaryResponse;
 import com.here.xyz.responses.ErrorResponse;
+import com.here.xyz.responses.HealthStatus;
+import com.here.xyz.responses.StatisticsResponse;
 import com.here.xyz.responses.XyzResponse;
+import com.here.xyz.util.service.Core;
+import com.here.xyz.util.service.HttpException;
+import com.here.xyz.util.service.rest.TooManyRequestsException;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
-import java.io.IOException;
+import io.vertx.core.json.DecodeException;
+import io.vertx.core.json.JsonObject;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import org.slf4j.Marker;
+import org.apache.commons.lang3.ArrayUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
 
-public class RpcClient implements Logging {
+public class RpcClient {
 
-  private static final ConcurrentHashMap<String, RpcClient> storageIdToClient = new ConcurrentHashMap<>();
+  private static final Logger logger = LogManager.getLogger();
+
+  private static final ConcurrentHashMap<String, RpcClient> connectorIdToClient = new ConcurrentHashMap<>();
   private static final RelocationClient relocationClient = new RelocationClient(Service.configuration.XYZ_HUB_S3_BUCKET);
 
-  /**
-   * The connector this client is currently bound to.
-   */
-  protected volatile Connector connector;
   private RemoteFunctionClient functionClient;
 
   /**
@@ -69,38 +91,73 @@ public class RpcClient implements Logging {
    */
   private RpcClient(Connector connector) throws NullPointerException {
     if (connector == null) {
-      throw new NullPointerException("connector");
+      throw new NullPointerException("Can not create RpcClient without connector configuration.");
     }
-    this.functionClient = RemoteFunctionClient.getInstanceFor(connector);
-    this.connector = connector;
+
+    final RemoteFunctionConfig remoteFunction = connector.getRemoteFunction();
+    if (remoteFunction instanceof Connector.RemoteFunctionConfig.AWSLambda) {
+      this.functionClient = new LambdaFunctionClient(connector);
+    }
+    else if (remoteFunction instanceof Connector.RemoteFunctionConfig.Embedded) {
+      this.functionClient = new EmbeddedFunctionClient(connector);
+    }
+    else if (remoteFunction instanceof Http) {
+      this.functionClient = new HTTPFunctionClient(connector);
+    }
+    else {
+      throw new IllegalArgumentException("Unknown remote function type: " + connector.getClass().getSimpleName());
+    }
   }
 
-  public static RpcClient getInstanceFor(Connector connector) {
+  static RpcClient getInstanceFor(Connector connector, boolean createIfNotExists) {
     if (connector == null) {
       throw new NullPointerException("connector");
     }
-    RpcClient client = storageIdToClient.get(connector.id);
+    RpcClient client = connectorIdToClient.get(connector.id);
+    if(!connector.active)
+      throw new IllegalStateException("Related connector is not active: " + connector.id);
     if (client == null) {
+      if (!createIfNotExists) throw new IllegalStateException("No RpcClient is ready for the given connector with ID " + connector.id);
       client = new RpcClient(connector);
-      final RpcClient existing = storageIdToClient.putIfAbsent(connector.id, client);
-      if (existing != null) {
-        client = existing; //Another thread was faster.
+      synchronized (connectorIdToClient) {
+        connectorIdToClient.put(connector.id, client);
       }
     }
     return client;
   }
 
+  /**
+   * Returns the RPC client singleton for the configuration with the ID of the given one. In other words, there will be only one instance
+   * per configuration ID.
+   *
+   * @param connector the configuration for which to return the RPC client.
+   * @return the RPC client.
+   */
+  public static RpcClient getInstanceFor(Connector connector) {
+    return getInstanceFor(connector, false);
+  }
+
   public static Collection<RpcClient> getAllInstances() {
-    return Collections.unmodifiableCollection(storageIdToClient.values());
+    return Collections.unmodifiableCollection(connectorIdToClient.values());
   }
 
-  public static void destroyInstance(@SuppressWarnings("unused") RpcClient client) {
-    //TODO: destroy the functionClient (which then closes all its connections aso.)
+  synchronized void destroy() throws IllegalStateException {
+    if (functionClient == null) {
+      throw new IllegalStateException("The RpcClient is already destroyed");
+    }
+    final Connector connectorConfig = functionClient.getConnectorConfig();
+    if (connectorConfig != null) {
+      synchronized (connectorIdToClient) {
+        connectorIdToClient.remove(connectorConfig.id, this);
+      }
+    }
+    //Destroy the functionClient (which then closes all its connections aso.)
+    functionClient.destroy();
+    functionClient = null;
   }
 
-  public final void updateConnectorConfig(Connector connectorConfig) {
-    this.connector = connectorConfig;
-    this.functionClient.updateStorageConfig(connectorConfig);
+  public final void setConnectorConfig(Connector connectorConfig) throws NullPointerException, IllegalArgumentException {
+    this.functionClient.setConnectorConfig(connectorConfig);
   }
 
   /**
@@ -108,28 +165,91 @@ public class RpcClient implements Logging {
    *
    * @return the connector configuration
    */
-  public Connector storage() {
-    return connector;
+  public Connector getConnector() {
+    final RemoteFunctionClient functionClient = this.functionClient;
+    if (functionClient != null) {
+      return functionClient.getConnectorConfig();
+    }
+    return null;
   }
 
-  private void invokeWithRelocation(final Marker marker, byte[] bytes, final Handler<AsyncResult<byte[]>> callback) {
+  public RemoteFunctionClient getFunctionClient() {
+    return functionClient;
+  }
+
+  private void invokeWithRelocation(final Marker marker, RpcContext context, byte[] bytes, boolean fireAndForget, boolean hasPriority, final Handler<AsyncResult<byte[]>> callback) {
     try {
+      final Connector connector = getConnector();
       if (bytes.length > connector.capabilities.maxPayloadSize) { // If the payload is too large to send directly to the connector
-        // If relocation is supported, use the relocation client to transfer the event to the connector
-        if (connector.capabilities.relocationSupport) {
-          logger().info(marker, "Relocating event. Total event byte size: {}", bytes.length);
-          // TODO: Execute blocking
-          bytes = relocationClient.relocate(marker.getName(), bytes);
-        } else {
-          // The size is to large, the event cannot be sent to the connector.
+        if (!connector.capabilities.relocationSupport) {
+          //The size is too large, the event cannot be sent to the connector.
           callback.handle(Future
               .failedFuture(new HttpException(REQUEST_ENTITY_TOO_LARGE, "The request entity size is over the limit for this connector.")));
           return;
         }
+
+        // If relocation is supported, use the relocation client to transfer the event to the connector
+        relocateAsync(marker, bytes, ar -> {
+          if (ar.failed()) {
+            callback.handle(Future.failedFuture(ar.cause()));
+            return;
+          }
+          context.functionCall = functionClient.submit(marker, ar.result(), fireAndForget, hasPriority, callback, context);
+        });
       }
-      functionClient.submit(marker, bytes, callback);
-    } catch (Exception e) {
+      else {
+        context.functionCall = functionClient.submit(marker, bytes, fireAndForget, hasPriority, callback, context);
+      }
+    }
+    catch (Exception e) {
       callback.handle(Future.failedFuture(e));
+    }
+  }
+
+  private void relocateAsync(Marker marker, byte[] bytes, Handler<AsyncResult<byte[]>> callback) {
+    logger.info(marker, "Relocating event. Total event byte size: {}", bytes.length);
+    Core.vertx.executeBlocking(
+        future -> {
+          try {
+            future.complete(relocationClient.relocate(marker.getName(), Payload.compress(bytes)));
+          }
+          catch (Exception e) {
+            logger.error("An error occurred when trying to relocate the event.", e);
+            future.fail(new HttpException(BAD_GATEWAY, "Unable to relocate event.", e));
+          }
+        },
+        ar -> {
+          if (ar.failed())
+            callback.handle(Future.failedFuture(ar.cause()));
+          else
+            callback.handle(Future.succeededFuture((byte[]) ar.result()));
+        }
+    );
+  }
+
+  /**
+   * Determines, for a given event and depending on the storage's capabilities and protocol-version, whether to expect a binary payload
+   * as response for the event.
+   * @param event
+   * @return Whether to expect a binary response from the storage connector
+   */
+  private boolean expectBinaryResponse(Event<?> event) {
+    return event instanceof GetFeaturesByTileEvent
+        && (((GetFeaturesByTileEvent) event).getResponseType() == MVT || ((GetFeaturesByTileEvent) event).getResponseType() == MVT_FLATTENED)
+        && getConnector().capabilities.mvtSupport
+        && Payload.compareVersions(getConnector().getRemoteFunction().protocolVersion, BinaryResponse.BINARY_SUPPORT_VERSION) >= 0;
+  }
+
+  /**
+   * The following is only a temporary implementation to forward the versionsToKeep space property as param for all space-based events.
+   * @param event The event on which to set the versionsToKeep property as param
+   * @param space The space from which to read the versionsToKeep property
+   */
+  private void tmpFillVersionsToKeepParam(Event event, Space space) {
+    if (space != null) {
+      if (event.getParams() == null)
+        event.setParams(new HashMap<>());
+      event.getParams().put("versionsToKeep", space.getVersionsToKeep());
     }
   }
 
@@ -139,30 +259,92 @@ public class RpcClient implements Logging {
    * @param marker the log marker
    * @param event the event
    * @param callback the callback handler
+   * @param hasPriority if true the enqueuing get bypassed
+   * @return The rpc context belonging to the request
    */
   @SuppressWarnings("rawtypes")
-  public void execute(final Marker marker, final Event event, final Handler<AsyncResult<XyzResponse>> callback) {
-    event.setConnectorParams(connector.params);
+  public RpcContext execute(final Marker marker, final Event event, final boolean hasPriority, final Handler<AsyncResult<XyzResponse>> callback, Space tmpSpace, String requesterId) {
+    tmpFillVersionsToKeepParam(event, tmpSpace);
+    final Connector connector = getConnector();
+    injectConnectorParams(event, connector);
+    final boolean expectBinaryResponse = expectBinaryResponse(event);
     final String eventJson = event.serialize();
-    final byte[] bytes = eventJson.getBytes();
-    logger().info(marker, "Invoking remote function \"{}\". Total uncompressed event size: {}, Event: {}", this.storage().id, bytes.length,
-        preview(eventJson, 4092));
+    final byte[] eventBytes = eventJson.getBytes();
+    final RpcContext context = new RpcContext(connector).withRequestSize(eventBytes.length);
 
-    invokeWithRelocation(marker, bytes, bytesResult -> {
+    //Check whether the event type is allowed on the connector
+    String region = Service.configuration == null ? null : Service.configuration.AWS_REGION;
+    if (!connector.isAllowedEventType(event.getClass().getSimpleName(), region)) {
+      callback.handle(Future.failedFuture(new HttpException(FORBIDDEN, "Event is not allowed on connector " + connector.id + " from region "
+          + region)));
+      return context;
+    }
+    event.setSourceRegion(region);
+
+    logger.info(marker, "Invoking remote function \"{}\". Total uncompressed event size: {}, Event: {}", connector.id, eventBytes.length,
+            preview(eventJson, 4092));
+
+    context.setRequesterId(requesterId);
+
+    invokeWithRelocation(marker, context, eventBytes, false, hasPriority, bytesResult -> {
+      if (functionClient == null) {
+        logger.warn("RpcClient for connector with ID {} was destroyed in the meantime, cancelling handling of response.",
+            connector.id);
+        context.cancelRequest();
+      }
+      if (context.cancelled)
+        return;
       if (bytesResult.failed()) {
         callback.handle(Future.failedFuture(bytesResult.cause()));
         return;
       }
 
-      parseResponse(marker, bytesResult.result(), r -> {
+      // this is the original event size sent by the connector, it can be different from the payload size, in case of relocation.
+      context.setResponseSize(bytesResult.result().length);
+      parseResponse(marker, bytesResult.result(), expectBinaryResponse, r -> {
         if (r.failed()) {
-          logger().error(marker, "Unable to decode the response.", r.cause());
+          logger.warn(marker, "Error while handling the response from connector \"{}\".", connector.id, r.cause());
           callback.handle(Future.failedFuture(r.cause()));
           return;
         }
         callback.handle(Future.succeededFuture(r.result()));
       });
     });
+    return context;
+  }
+
+  //TODO: Remove this injection of "connectorId" connector-param when the hash of ECPS is used as cache key for any connections in the PSQL connector
+  private static void injectConnectorParams(Event event, Connector connector) {
+    Map<String, Object> connectorParams = new HashMap<>(connector.params);
+    connectorParams.put("connectorId", connector.id);
+    event.setConnectorParams(connectorParams);
+  }
+
+  public RpcContext execute(final Marker marker, final Event event, final boolean hasPriority, final Handler<AsyncResult<XyzResponse>> callback) {
+    return execute(marker, event, hasPriority, callback, null, null);
+  }
+
+
+  public RpcContext execute(final Marker marker, final Event event, final Handler<AsyncResult<XyzResponse>> callback, Space tmpSpace) {
+    return execute(marker, event, false, callback, tmpSpace, null);
+  }
+
+  public RpcContext execute(final Marker marker, final Event event, final Handler<AsyncResult<XyzResponse>> callback) {
+    return execute(marker, event, callback, null);
+  }
+
+  /**
+   * Executes an event and returns the parsed FeatureCollection response.
+   *
+   * @param marker the log marker
+   * @param event the event
+   * @param callback the callback handler
+   * @param requesterId the id of the sender
+   * @return The rpc context belonging to the request
+   */
+  @SuppressWarnings("rawtypes")
+  public RpcContext execute(final Marker marker, final Event event, final Handler<AsyncResult<XyzResponse>> callback, Space tmpSpace, String requesterId) {
+    return execute(marker, event, false, callback, tmpSpace, requesterId);
   }
 
   private String preview(String eventJson, @SuppressWarnings("SameParameterValue") int previewLength) {
@@ -178,106 +360,331 @@ public class RpcClient implements Logging {
    * This method should only be used to "inform" a connector about an event rather then "calling" it.
    *
    * @param marker the log marker
-   * @param event the event
+   * @param event  the event
+   * @return The rpc context belonging to the request
+   * @throws NullPointerException if this RPC client is closed or the function client it is bound to is closed.
    */
-  public void send(final Marker marker, @SuppressWarnings("rawtypes") final Event event) {
-    event.setConnectorParams(connector.params);
-    invokeWithRelocation(marker, event.serialize().getBytes(), r -> {
+  public RpcContext send(final Marker marker, @SuppressWarnings("rawtypes") final Event event) throws NullPointerException {
+    final Connector connector = getConnector();
+    injectConnectorParams(event, connector);
+    final byte[] eventBytes = event.toByteArray();
+    RpcContext context = new RpcContext(connector).withRequestSize(eventBytes.length);
+    invokeWithRelocation(marker, context, eventBytes, true, false, r -> {
       if (r.failed()) {
-        logger().error(marker, "Failed to send event to remote function {}.", connector.remoteFunction.id);
+        if (r.cause() instanceof HttpException
+            && ((HttpException) r.cause()).status.code() >= 400 && ((HttpException) r.cause()).status.code() <= 499) {
+          logger.warn(marker, "Failed to send event to remote function {}.", connector.getRemoteFunction().id, r.cause());
+        }
+        else
+          logger.error(marker, "Failed to send event to remote function {}.", connector.getRemoteFunction().id, r.cause());
       }
     });
+    return context;
   }
 
-  private void parseResponse(Marker marker, final byte[] bytes, @SuppressWarnings("rawtypes") Handler<AsyncResult<XyzResponse>> callback) {
+  private void validateResponsePayload(Marker marker, final Typed payload) throws HttpException {
+    if (payload == null)
+      throw new NullPointerException("Response payload is null");
+    if (!(payload instanceof XyzResponse)) {
+      logger.warn(marker, "The connector responded with an unexpected response type {}", payload.getClass().getSimpleName());
+      throw new HttpException(BAD_GATEWAY, "The connector responded with unexpected response type.");
+    }
+    if (payload instanceof ErrorResponse) {
+      ErrorResponse errorResponse = (ErrorResponse) payload;
+      logger.warn(marker, "The connector {} [{}] responded with an error of type {}: {}", getConnector().id, (getConnector().getRemoteFunction()).getClass().getSimpleName() ,errorResponse.getError(),
+          errorResponse.getErrorMessage());
+
+      switch (errorResponse.getError()) {
+        case NOT_FOUND:
+          throw new HttpException(NOT_FOUND, errorResponse.getErrorMessage(), errorResponse.getErrorDetails());
+        case NOT_IMPLEMENTED:
+          throw new HttpException(NOT_IMPLEMENTED, "The connector is unable to process this request.", errorResponse.getErrorDetails());
+        case CONFLICT:
+          throw new HttpException(CONFLICT, errorResponse.getErrorMessage(), errorResponse.getErrorDetails());
+        case FORBIDDEN:
+          throw new HttpException(FORBIDDEN, "The user is not authorized.", errorResponse.getErrorDetails());
+        case TOO_MANY_REQUESTS:
+          throw new TooManyRequestsException("The connector cannot process the message due to a limitation in an upstream service or a database.",
+              CONNECTOR, errorResponse.getErrorDetails());
+        case ILLEGAL_ARGUMENT:
+          throw new HttpException(BAD_REQUEST, errorResponse.getErrorMessage(), errorResponse.getErrorDetails());
+        case TIMEOUT:
+          throw new HttpException(GATEWAY_TIMEOUT, "Connector timeout error.", errorResponse.getErrorDetails());
+        case EXCEPTION:
+        case BAD_GATEWAY:
+          throw new HttpException(BAD_GATEWAY, "Connector error.", errorResponse.getErrorDetails());
+        case PAYLOAD_TO_LARGE:
+          throw new HttpException(Api.RESPONSE_PAYLOAD_TOO_LARGE,
+              Api.RESPONSE_PAYLOAD_TOO_LARGE_MESSAGE + " " + errorResponse.getErrorMessage(), errorResponse.getErrorDetails());
+      }
+    }
+  }
+
+  private boolean isOldHealthStatus(JsonObject response) {
+    return response.containsKey("status") && !response.containsKey("type");
+  }
+
+  @SuppressWarnings({"rawtypes", "UnusedAssignment"})
+  private void parseResponse(final Marker marker, byte[] bytes, boolean expectBinaryResponse, final Handler<AsyncResult<XyzResponse>> callback) {
     String stringResponse = null;
-    if (bytes != null) {
-      stringResponse = new String(bytes, StandardCharsets.UTF_8);
-    }
-    if (bytes == null || stringResponse.length() == 0) {
-      logger().error(marker, "Received empty response, but expected a JSON response.", new NullPointerException());
-      callback.handle(Future.failedFuture(new HttpException(BAD_GATEWAY, "Received an empty response from the storage connector.")));
-      return;
-    }
 
     try {
-      Typed payload = XyzSerializable.deserialize(stringResponse);
-      if (payload instanceof RelocatedEvent) {
-        try {
-          // TODO: async
-          InputStream input = relocationClient.processRelocatedEvent((RelocatedEvent) payload);
-          payload = XyzSerializable.deserialize(input);
-        } catch (Exception e) {
-          logger().error("An error when processing a relocated response.", e);
-          throw new HttpException(BAD_GATEWAY, "Unable to load the relocated event.");
-        }
-      }
+      checkResponseSize(marker, bytes);
 
-      if (payload instanceof ErrorResponse) {
-        ErrorResponse errorResponse = (ErrorResponse) payload;
-        logger().info(marker, "The connector responded with an error of type {}: {}", errorResponse.getError(),
-            errorResponse.getErrorMessage());
+      if (Payload.isGzipped(bytes))
+        bytes = Payload.decompress(bytes);
+      checkUncompressedResponseSize(marker, bytes);
 
-        if (XyzError.TIMEOUT.equals(errorResponse.getError())) {
-          throw new HttpException(GATEWAY_TIMEOUT, "Connector timeout error.");
-        } else if (XyzError.ILLEGAL_ARGUMENT.equals(errorResponse.getError())) {
-          throw new HttpException(BAD_REQUEST, errorResponse.getErrorMessage());
-        }
-        throw new HttpException(BAD_GATEWAY, "Connector error.");
-      }
-      if (payload instanceof XyzResponse) {
-        //noinspection rawtypes
-        callback.handle(Future.succeededFuture((XyzResponse) payload));
+      if (expectBinaryResponse) {
+        tryDecodeBinaryResponse(marker, bytes, callback);
         return;
       }
 
-      logger().info(marker, "The connector responded with an unexpected response type {}", payload.getClass().getSimpleName());
-      callback.handle(Future.failedFuture(new HttpException(BAD_GATEWAY, "The connector responded with unexpected response type.")));
-    } catch (NullPointerException e) {
-      logger().error(marker, "Received empty response, but expected a JSON response.", new NullPointerException());
-      callback.handle(Future.failedFuture(new HttpException(BAD_GATEWAY, "Received an empty response from the storage connector.")));
-    } catch (JsonMappingException e) {
-      logger().error(marker, "Error in the provided content {}", stringResponse, e);
-      HttpException parsedError = getErrorMessage(stringResponse);
-      callback.handle(Future.failedFuture(parsedError != null ? parsedError : new HttpException(BAD_GATEWAY,
-          "Invalid content provided by the connector: Invalid JSON type. Expected is a sub-type of XyzResponse.")));
-    } catch (JsonParseException e) {
-      logger().error(marker, "Error in the provided content", e);
+      stringResponse = new String(bytes);
+      bytes = null; //GC may collect the bytes now.
+
+      Typed payload;
+      try {
+        payload = XyzSerializable.deserialize(stringResponse);
+      }
+      catch (InvalidTypeIdException e) {
+        JsonObject response = new JsonObject(stringResponse);
+
+        if (!isOldHealthStatus(response)) throw e;
+
+        //Keep backward compatibility for old HealthStatus responses
+        logger.warn(marker, "Connector {} responds with an old version of the HealthStatus response.", getConnector().id);
+        payload = new HealthStatus().withStatus(response.getString("status"));
+      }
+
+      if (payload instanceof RelocatedEvent) {
+        //Unwrap the RelocatedEvent and download the actual content, afterwards call this method again with the unwrapped result
+        processRelocatedEventAsync((RelocatedEvent) payload, ar -> {
+          if (ar.failed()) {
+            callback.handle(Future.failedFuture(ar.cause()));
+            return;
+          }
+          parseResponse(marker, ar.result(), expectBinaryResponse, callback);
+        });
+      }
+      else {
+        validateResponsePayload(marker, payload);
+        postProcessResponsePayload(marker, payload);
+        callback.handle(Future.succeededFuture((XyzResponse) payload));
+      }
+    }
+    catch (NullPointerException e) {
+      logger.warn(marker, "Received empty response from connector \"{}\", but expected a JSON response.", getConnector().id, e);
+      callback.handle(Future.failedFuture(new HttpException(BAD_GATEWAY, "Received an empty response from the connector.")));
+    }
+    catch (JsonMappingException e) {
+      logger.warn(marker, "Mapping error in the provided content {} from connector \"{}\".", stringResponse, getConnector().id, e);
+      callback.handle(Future.failedFuture(getJsonMappingErrorMessage(stringResponse)));
+    }
+    catch (JsonParseException | DecodeException e) {
+      logger.warn(marker, "Parsing error in the provided content {} from connector \"{}\".", stringResponse, getConnector().id, e);
       callback.handle(Future.failedFuture(new HttpException(BAD_GATEWAY, "Invalid content provided by the connector: Invalid JSON string. "
-          + "Error at line " + e.getLocation().getLineNr() + ", column " + e.getLocation().getColumnNr() + ".")));
-    } catch (IOException e) {
-      logger().error(marker, "Error in the provided content ", e);
-      callback.handle(Future.failedFuture(new HttpException(BAD_GATEWAY, "Cannot read input JSON string from the connector.")));
-    } catch (HttpException e) {
+          + (e instanceof JsonParseException ? "Error at line " + ((JsonParseException) e).getLocation().getLineNr() + ", column "
+          + ((JsonParseException) e).getLocation().getColumnNr() + "." : ""))));
+    }
+    catch (HttpException e) {
+      logger.warn(marker, "Error from connector.", e);
       callback.handle(Future.failedFuture(e));
-    } catch (Exception e) {
-      logger().error(marker, "Unexpected exception while processing connector response: {}", stringResponse, e);
+    }
+    catch (Exception e) {
+      logger.warn(marker, "Unexpected exception while processing connector \"{}\" response: {}.", getConnector().id, stringResponse, e);
       callback.handle(
-          Future.failedFuture(new HttpException(INTERNAL_SERVER_ERROR, "Unexpected exception while processing connector response.")));
+          Future.failedFuture(new HttpException(BAD_GATEWAY, "Unexpected exception while processing connector response.")));
     }
   }
 
   /**
+   * Try to decode the binary response and fall back to JSON-decoding in case it fails.
+   * @param marker
+   * @param bytes
+   * @param callback
+   */
+  private void tryDecodeBinaryResponse(Marker marker, byte[] bytes, Handler<AsyncResult<XyzResponse>> callback) {
+    BinaryResponse binaryResponse;
+    try {
+      binaryResponse = BinaryResponse.fromByteArray(bytes);
+    }
+    catch (Exception e) {
+      /*
+      Could happen e.g. in the following cases:
+       - Error responses which were sent by the connector but not encoded as BinaryResponse
+       - Error-messages from the underlying system of the remote-function in general
+       - Relocated responses
+       - ...
+      */
+      logger.info(marker, "Expected a binary response, but did not get one. Falling back to JSON decoding.");
+      parseResponse(marker, bytes, false, callback);
+      return;
+    }
+
+    if (APPLICATION_JSON.equals(binaryResponse.getMimeType())) {
+      //In case we got a JSON string encoded within a BinaryResponse, it needs to be un-packed and continued with the JSON-decoding
+      parseResponse(marker, binaryResponse.getBytes(), false, callback);
+    }
+    else
+      callback.handle(Future.succeededFuture(binaryResponse));
+  }
+
+  private void processRelocatedEventAsync(RelocatedEvent relocatedEvent, Handler<AsyncResult<byte[]>> callback) {
+    Core.vertx.executeBlocking(
+        future -> {
+          try {
+            InputStream input = relocationClient.processRelocatedEvent(relocatedEvent, getConnector().getRemoteFunction().getRegion());
+            future.complete(ByteStreams.toByteArray(input));
+          }
+          catch (Exception e) {
+            logger.error("An error occurred when processing a relocated response.", e);
+            future.fail(new HttpException(BAD_GATEWAY, "Unable to load the relocated event.", e));
+          }
+        },
+        ar -> {
+          if (ar.failed()) {
+            callback.handle(Future.failedFuture(ar.cause()));
+          }
+          else {
+            callback.handle(Future.succeededFuture((byte[]) ar.result()));
+          }
+        }
+    );
+  }
+
+  /**
    * Tries to parse the stringResponse and checks for errorMessage. In case of found, it throws a new exception with the errorMessage.
-   * Additionally checks if the message is related to Time Out and throws a GATEWAY_TIMEOUT. Also, if the message is not parsable at all,
+   * Additionally, checks if the message is related to Time Out and throws a GATEWAY_TIMEOUT. Also, if the message is not parsable at all,
    * throws an exception informing "Invalid JSON string"
    *
    * @param stringResponse the original response
    */
-  private HttpException getErrorMessage(final String stringResponse) {
+  private HttpException getJsonMappingErrorMessage(final String stringResponse) {
     try {
-      final JsonNode node = XyzSerializable.DEFAULT_MAPPER.get().readTree(stringResponse);
-      if (node.has("errorMessage")) {
-        final String errorMessage = node.get("errorMessage").asText();
-        if (errorMessage.contains("Task timed out after ")) {
+      Map<String, Object> response = XyzSerializable.deserialize(stringResponse, Map.class);
+      if (response.containsKey("errorMessage")) {
+        final String errorMessage = response.get("errorMessage").toString();
+        if (errorMessage.contains("timed out"))
           return new HttpException(GATEWAY_TIMEOUT, "Connector timeout error.");
-        }
-        return new HttpException(BAD_GATEWAY, errorMessage);
       }
-    } catch (IOException jpe) {
-      logger().error("Invalid content provided by the connector: Invalid JSON string: " + stringResponse, jpe);
-      return new HttpException(BAD_GATEWAY, "Invalid content provided by the connector");
     }
-    return null;
+    catch (Exception e) {
+      logger.warn("Unable to parse error response from connector", e);
+    }
+
+    return new HttpException(BAD_GATEWAY,
+        "Invalid content provided by the connector: Invalid JSON type. Expected is a sub-type of XyzResponse.");
   }
+
+  protected void checkResponseSize(Marker marker, byte[] bytes) throws HttpException {
+    if (ArrayUtils.isEmpty(bytes))
+      throw new NullPointerException("Response string is null or empty");
+
+    // When MAX_HTTP_RESPONSE_SIZE is bigger than zero, check whether a gzipped payload is bigger than MAX_HTTP_RESPONSE_SIZE
+    if (Api.MAX_HTTP_RESPONSE_SIZE > 0 && Payload.isGzipped(bytes) && bytes.length > Api.MAX_HTTP_RESPONSE_SIZE) {
+      throwResponseSizeException(marker);
+    }
+
+    // When MAX_SERVICE_RESPONSE_SIZE is bigger than zero, check whether an ungzipped payload is bigger than MAX_SERVICE_RESPONSE_SIZE
+    if (Api.MAX_SERVICE_RESPONSE_SIZE > 0 && bytes.length > Api.MAX_SERVICE_RESPONSE_SIZE) {
+      throwResponseSizeException(marker);
+    }
+
+    // when the data from connector is uncompressed and its size is bigger than the current MAX_HTTP_RESPONSE_SIZE, compress it and check again.
+    if (!Payload.isGzipped(bytes) && Api.MAX_HTTP_RESPONSE_SIZE > 0 && bytes.length > Api.MAX_HTTP_RESPONSE_SIZE) {
+      // uncompressed data should be checked whether it's compression would fit under MAX_HTTP_RESPONSE_SIZE
+      byte[] compressed = Payload.compress(bytes);
+      if (compressed != null && compressed.length > Api.MAX_HTTP_RESPONSE_SIZE)
+        throwResponseSizeException(marker);
+    }
+  }
+
+  protected void checkUncompressedResponseSize(Marker marker, byte[] bytes) throws HttpException {
+    if (ArrayUtils.isEmpty(bytes))
+      throw new NullPointerException("Response string is null or empty");
+
+    if (Service.configuration.MAX_UNCOMPRESSED_RESPONSE_SIZE > 0 && bytes.length > Service.configuration.MAX_UNCOMPRESSED_RESPONSE_SIZE) {
+      throwResponseSizeException(marker);
+    }
+  }
+
+  protected void throwResponseSizeException(Marker marker) throws HttpException {
+    logger.warn(marker, "Too large payload received from the connector \"{}\"", getConnector().id);
+    throw new HttpException(Api.RESPONSE_PAYLOAD_TOO_LARGE, Api.RESPONSE_PAYLOAD_TOO_LARGE_MESSAGE);
+  }
+
+  private void postProcessResponsePayload(Marker marker, final Typed payload) {
+    if (payload instanceof FeatureCollection) {
+      final FeatureCollection fc = (FeatureCollection) payload;
+      // TODO copy handle property over nextPageToken, when handle is finally removed, this code won't be necessary anymore
+      fc.setNextPageToken(fc.getHandle());
+      return;
+    }
+
+    if (payload instanceof StatisticsResponse) {
+      final StatisticsResponse sr = (StatisticsResponse) payload;
+      // TODO copy byteSize property over dataSize, when byteSize is finally removed, this code won't be necessary anymore
+      sr.setDataSize(sr.getByteSize());
+    }
+  }
+
+  public static class RpcContext {
+    private int requestSize = -1;
+    private int responseSize = -1;
+    private String requesterId;
+    private volatile boolean cancelled = false;
+
+    private final Connector connector;
+    private FunctionCall functionCall;
+
+    public RpcContext(Connector connector) {
+      this.connector = connector;
+    }
+
+    public void cancelRequest() {
+      cancelled = true;
+      functionCall.cancel(requesterId);
+    }
+
+    public int getRequestSize() {
+      return requestSize;
+    }
+
+    public void setRequestSize(int requestSize) {
+      this.requestSize = requestSize;
+    }
+
+    public int getResponseSize() {
+      return responseSize;
+    }
+
+    public void setResponseSize(int responseSize) {
+      this.responseSize = responseSize;
+    }
+
+    public RpcContext withRequestSize(int requestSize) {
+      setRequestSize(requestSize);
+      return this;
+    }
+
+    public RpcContext withResponseSize(int responseSize) {
+      setResponseSize(responseSize);
+      return this;
+    }
+
+    public Connector getConnector() {
+      return connector;
+    }
+
+    public String getRequesterId() {
+      return requesterId;
+    }
+
+    public void setRequesterId(String requesterId) {
+      this.requesterId = requesterId;
+    }
+  }
+
+
 }

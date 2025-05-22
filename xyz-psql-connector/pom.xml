@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (C) 2017-2019 HERE Europe B.V.
+  ~ Copyright (C) 2017-2024 HERE Europe B.V.
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@
   <parent>
     <groupId>com.here.xyz</groupId>
     <artifactId>xyz-hub</artifactId>
-    <relativePath>../</relativePath>
-    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+    <version>3.17.12-SNAPSHOT</version>
   </parent>
 
   <licenses>
@@ -76,6 +76,9 @@
                 <goals>
                   <goal>jar</goal>
                 </goals>
+                <configuration>
+                  <skip>true</skip>
+                </configuration>
               </execution>
             </executions>
           </plugin>
@@ -90,13 +93,18 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
         <configuration>
+          <createDependencyReducedPom>false</createDependencyReducedPom>
           <transformers>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
               <mainClass>com.here.xyz.psql.PSQLXyzConnector</mainClass>
+              <manifestEntries>
+                <Multi-Release>true</Multi-Release>
+              </manifestEntries>
             </transformer>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
           </transformers>
-          <finalName>xyz-psql-connector</finalName>
+          <outputDirectory>${project.build.outputDirectory}</outputDirectory>
+          <finalName>${project.artifactId}-${project.version}</finalName>
           <filters>
             <filter>
               <artifact>*:*</artifact>
@@ -113,7 +121,19 @@
               </includes>
             </filter>
             <filter>
+              <artifact>commons-logging:commons-logging</artifact>
+              <includes>
+                <include>**</include>
+              </includes>
+            </filter>
+            <filter>
               <artifact>org.apache.logging.log4j:log4j-core</artifact>
+              <includes>
+                <include>**</include>
+              </includes>
+            </filter>
+            <filter>
+              <artifact>org.apache.logging.log4j:log4j-jcl</artifact>
               <includes>
                 <include>**</include>
               </includes>
@@ -131,13 +151,13 @@
               </includes>
             </filter>
             <filter>
-              <artifact>c3p0:mchange-commons-java</artifact>
+              <artifact>com.mchange:mchange-commons-java</artifact>
               <includes>
                 <include>**</include>
               </includes>
             </filter>
             <filter>
-              <artifact>c3p0:c3p0</artifact>
+              <artifact>com.mchange:c3p0</artifact>
               <includes>
                 <include>**</include>
               </includes>
@@ -202,16 +222,12 @@
       <groupId>${project.groupId}</groupId>
       <artifactId>xyz-connectors</artifactId>
     </dependency>
+    <dependency>
+      <groupId>${project.groupId}</groupId>
+      <artifactId>xyz-util</artifactId>
+    </dependency>
 
     <!--  Logging libraries -->
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>slf4j-api</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.slf4j</groupId>
-      <artifactId>jcl-over-slf4j</artifactId>
-    </dependency>
     <dependency>
       <groupId>org.apache.logging.log4j</groupId>
       <artifactId>log4j-slf4j-impl</artifactId>
@@ -225,17 +241,21 @@
       <artifactId>log4j-api</artifactId>
     </dependency>
     <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-jcl</artifactId>
+    </dependency>
+    <dependency>
       <groupId>com.amazonaws</groupId>
       <artifactId>aws-lambda-java-log4j2</artifactId>
     </dependency>
 
-    <!-- -->
+    <!-- AWS SDKs -->
     <dependency>
       <groupId>commons-dbutils</groupId>
       <artifactId>commons-dbutils</artifactId>
     </dependency>
     <dependency>
-      <groupId>com.vividsolutions</groupId>
+      <groupId>org.locationtech.jts</groupId>
       <artifactId>jts-core</artifactId>
     </dependency>
     <dependency>
@@ -256,22 +276,34 @@
       <artifactId>c3p0</artifactId>
     </dependency>
 
+    <!-- PSQL JDBC driver -->
     <dependency>
       <groupId>org.postgresql</groupId>
       <artifactId>postgresql</artifactId>
     </dependency>
 
     <dependency>
-      <groupId>junit</groupId>
-      <artifactId>junit</artifactId>
+      <groupId>com.google.protobuf</groupId>
+      <artifactId>protobuf-java</artifactId>
+      <version>3.25.5</version>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <artifactId>junit-jupiter-api</artifactId>
+      <groupId>org.junit.jupiter</groupId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.vintage</groupId>
+      <artifactId>junit-vintage-engine</artifactId>
       <scope>test</scope>
     </dependency>
 
     <dependency>
-      <groupId>com.jayway.jsonpath</groupId>
+      <groupId>io.rest-assured</groupId>
       <artifactId>json-path</artifactId>
       <scope>test</scope>
     </dependency>
-
   </dependencies>
 </project>

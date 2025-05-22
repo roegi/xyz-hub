@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,16 +19,17 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.jayway.restassured.RestAssured.given;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
+import static io.netty.handler.codec.http.HttpResponseStatus.NO_CONTENT;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
-import java.io.IOException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.BeforeClass;
@@ -169,5 +170,157 @@ public class ModifySpaceApiIT extends TestSpaceWithFeature {
         .body("processors.rule-tagger", notNullValue())
         .body("processors.rule-tagger.size()", is(1))
         .body("processors.rule-tagger[0].eventTypes.size()", is(2));
+  }
+
+  @Test
+  public void testRemoveStorage() {
+    given()
+        .accept(APPLICATION_JSON)
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_WITH_ACCESS_CONNECTOR_RULE_TAGGER))
+        .body("{\"storage\": null}")
+        .when()
+        .patch("/spaces/x-psql-test")
+        .then()
+        .statusCode(BAD_REQUEST.code());
+  }
+
+  @Test
+  public void patchWithoutChange() {
+    given()
+        .accept(APPLICATION_JSON)
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"title\": \"My Demo Space\"}")
+        .when()
+        .patch("/spaces/x-psql-test")
+        .then()
+        .statusCode(OK.code());
+  }
+
+  @Test
+  public void patchVersionsToKeepToZero() {
+    given()
+        .accept(APPLICATION_JSON)
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"versionsToKeep\": 0}")
+        .when()
+        .patch("/spaces/x-psql-test")
+        .then()
+        .statusCode(BAD_REQUEST.code());
+  }
+
+  @Test
+  public void patchExistingVersionsToKeepBiggerThanZeroToZero() {
+    given()
+        .accept(APPLICATION_JSON)
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("\"versionsToKeep\": 0}")
+        .when()
+        .patch("/spaces/x-psql-test")
+        .then()
+        .statusCode(BAD_REQUEST.code());
+  }
+
+  @Test
+  public void patchExistingVersionsToKeepFromOneToTwo() {
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"versionsToKeep\": 2}")
+        .when()
+        .patch("/spaces/x-psql-test")
+        .then()
+        .statusCode(OK.code());
+  }
+
+  @Test
+  public void patchExistingVersionsToKeepFromTenToOne() {
+    cleanUpId = "x-psql-test-v2k-10";
+    given()
+        .accept(APPLICATION_JSON)
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"id\":\""+cleanUpId+"\",\"title\": \"v2k10\",\"versionsToKeep\": 10}")
+        .when()
+        .post("/spaces/")
+        .then()
+        .statusCode(OK.code());
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"versionsToKeep\": 2}")
+        .when()
+        .patch("/spaces/" + cleanUpId)
+        .then()
+        .statusCode(OK.code());
+
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"versionsToKeep\": 1}")
+        .when()
+        .patch("/spaces/" + cleanUpId)
+        .then()
+        .statusCode(BAD_REQUEST.code());
+  }
+
+  @Test
+  public void createSpaceDryRun() {
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"id\":\"x-psql-test-dry-run\",\"title\": \"dryRun-space\"}")
+        .when()
+        .post("/spaces?dryRun=true")
+        .then()
+        .statusCode(OK.code());
+
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .get("/spaces/x-psql-test-dry-run")
+        .then()
+        .statusCode(NOT_FOUND.code());
+  }
+
+  @Test
+  public void modifySpaceDryRun() {
+    given()
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .body("{\"title\": \"dryRun-space\"}")
+        .when()
+        .patch("/spaces/x-psql-test?dryRun=true")
+        .then()
+        .statusCode(OK.code());
+
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .get("/spaces/x-psql-test")
+        .then()
+        .statusCode(OK.code())
+        .body("title", equalTo("My Demo Space"));
+  }
+
+  @Test
+  public void deleteSpaceDryRun() {
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .delete("/spaces/x-psql-test?dryRun=true")
+        .then()
+        .statusCode(NO_CONTENT.code());
+
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .get("/spaces/x-psql-test")
+        .then()
+        .statusCode(OK.code());
   }
 }

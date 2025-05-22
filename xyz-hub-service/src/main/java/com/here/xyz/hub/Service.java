@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,57 +19,66 @@
 
 package com.here.xyz.hub;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.here.xyz.hub.auth.Authorization;
-import com.here.xyz.hub.cache.CacheClient;
+import com.here.xyz.hub.cache.*;
 import com.here.xyz.hub.config.ConnectorConfigClient;
+import com.here.xyz.hub.config.SettingsConfigClient;
 import com.here.xyz.hub.config.SpaceConfigClient;
-import com.here.xyz.hub.connectors.BurstAndUpdateThread;
-import com.here.xyz.hub.util.ARN;
-import com.here.xyz.hub.util.ConfigDecryptor;
-import com.here.xyz.hub.util.ConfigDecryptor.CryptoException;
-import com.here.xyz.hub.util.logging.Logging;
-import io.vertx.config.ConfigRetriever;
-import io.vertx.config.ConfigRetrieverOptions;
-import io.vertx.config.ConfigStoreOptions;
+import com.here.xyz.hub.config.SubscriptionConfigClient;
+import com.here.xyz.hub.config.TagConfigClient;
+import com.here.xyz.hub.connectors.ConfigUpdateThread;
+import com.here.xyz.hub.connectors.WarmupRemoteFunctionThread;
+import com.here.xyz.hub.rest.admin.MessageBroker;
+import com.here.xyz.hub.rest.admin.Node;
+import com.here.xyz.hub.util.metrics.GcDurationMetric;
+import com.here.xyz.hub.util.metrics.GlobalInflightRequestMemory;
+import com.here.xyz.hub.util.metrics.GlobalUsedRfcConnections;
+import com.here.xyz.hub.util.metrics.MajorGcCountMetric;
+import com.here.xyz.hub.util.metrics.MemoryMetric;
+import com.here.xyz.hub.util.metrics.base.CWBareValueMetricPublisher;
+import com.here.xyz.hub.util.metrics.base.MetricPublisher;
+import com.here.xyz.hub.util.metrics.net.ConnectionMetrics;
+import com.here.xyz.hub.util.metrics.net.ConnectionMetrics.HubMetricsFactory;
+import com.here.xyz.util.service.Core;
+import com.here.xyz.util.service.errors.ErrorManager;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.CompositeFuture;
 import io.vertx.core.DeploymentOptions;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.metrics.MetricsOptions;
+import io.vertx.ext.web.Router;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.ext.web.client.WebClientOptions;
-import java.io.IOException;
-import java.io.InputStream;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
-import java.util.Properties;
+import java.util.Hashtable;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.config.Configurator;
-import org.apache.logging.log4j.core.util.NetUtils;
 
-public class Service implements Logging {
+public class Service extends Core {
 
-  /**
-   * The service start time.
-   */
-  public static final long START_TIME = System.currentTimeMillis();
+  private static final Logger logger = LogManager.getLogger();
 
-  /**
-   * The build version.
-   */
-  public static final String BUILD_VERSION = getBuildProperty("xyzhub.version");
-  public static final String XYZ_HUB_USER_AGENT = "XYZ-Hub/" + Service.BUILD_VERSION;
 
-  /**
-   * The build time.
-   */
-  public static final long BUILD_TIME = getBuildTime();
+  public static final String XYZ_HUB_USER_AGENT = "XYZ-Hub/" + buildVersion();
 
   /**
    * The host ID.
@@ -77,14 +86,14 @@ public class Service implements Logging {
   public static final String HOST_ID = UUID.randomUUID().toString();
 
   /**
-   * The log4J2 console configuration
+   * The shared map used across verticles
    */
-  private static final String CONSOLE_LOG_CONFIG = "log4j2-console-json.json";
+  public static final String SHARED_DATA = "SHARED_DATA";
 
   /**
-   * The entry point to the Vert.x core API.
+   * The key to access the global router in the shared data
    */
-  public static Vertx vertx;
+  public static final String GLOBAL_ROUTER = "GLOBAL_ROUTER";
 
   /**
    * The service configuration.
@@ -97,9 +106,24 @@ public class Service implements Logging {
   public static SpaceConfigClient spaceConfigClient;
 
   /**
-   * The client to access the the connector configuration.
+   * The client to access the connector configuration.
    */
   public static ConnectorConfigClient connectorConfigClient;
+
+  /**
+   * The client to access the subscription configuration.
+   */
+  public static SubscriptionConfigClient subscriptionConfigClient;
+
+  /**
+   * The client to access the reader configuration.
+   */
+  public static TagConfigClient tagConfigClient;
+
+  /**
+   * The client to access runtime settings.
+   */
+  public static SettingsConfigClient settingsConfigClient;
 
   /**
    * A web client to access XYZ Hub nodes and other web resources.
@@ -107,108 +131,167 @@ public class Service implements Logging {
   public static WebClient webClient;
 
   /**
-   * The cache client for the service.
+   * The cache client for the volatile service cache.
    */
-  public static CacheClient cacheClient;
+  public static CacheClient volatileCacheClient;
+
+  /**
+   * The cache client for the static service cache.
+   */
+  public static CacheClient staticCacheClient;
+
+  /**
+   * The node's MessageBroker which is used to send AdminMessages.
+   */
+  public static MessageBroker messageBroker;
 
   /**
    * The hostname
    */
   private static String hostname;
+  public static final boolean IS_USING_ZGC = isUsingZgc();
+
+  private static final List<MetricPublisher> metricPublishers = new LinkedList<>();
+  private static final String ERROR_DEFINITIONS_FILE = "hub-errors.json";
+  private static Router globalRouter;
 
   /**
    * The service entry point.
    */
   public static void main(String[] arguments) {
     Configurator.initialize("default", CONSOLE_LOG_CONFIG);
-    final ConfigStoreOptions fileStore = new ConfigStoreOptions().setType("file").setConfig(new JsonObject().put("path", "config.json"));
-    final ConfigStoreOptions envConfig = new ConfigStoreOptions().setType("env");
-    final ConfigStoreOptions sysConfig = new ConfigStoreOptions().setType("sys");
-    final ConfigRetrieverOptions options = new ConfigRetrieverOptions().addStore(fileStore).addStore(envConfig).addStore(sysConfig);
-    boolean debug = Arrays.asList(arguments).contains("--debug");
+    isDebugModeActive = Arrays.asList(arguments).contains("--debug");
 
-    final VertxOptions vertxOptions = new VertxOptions();
+    initErrorManager();
 
-    if (debug) {
-      vertxOptions
-          .setBlockedThreadCheckInterval(TimeUnit.MINUTES.toMillis(1))
-          .setMaxEventLoopExecuteTime(TimeUnit.MINUTES.toMillis(1))
-          .setMaxWorkerExecuteTime(TimeUnit.MINUTES.toMillis(1))
-          .setWarningExceptionTime(TimeUnit.MINUTES.toMillis(1));
-    }
+    VertxOptions vertxOptions = new VertxOptions()
+        .setMetricsOptions(new MetricsOptions()
+            .setEnabled(true)
+            .setFactory(new HubMetricsFactory()));
 
-    vertx = Vertx.vertx(vertxOptions);
-    webClient = WebClient.create(Service.vertx, new WebClientOptions().setUserAgent(XYZ_HUB_USER_AGENT));
-    ConfigRetriever retriever = ConfigRetriever.create(vertx, options);
-    retriever.getConfig(Service::onConfigLoaded);
+    initializeVertx(vertxOptions)
+        .compose(Service::initializeGlobalRouter)
+        .compose(Core::initializeConfig)
+        .compose(Core::initializeLogger)
+        .compose(Service::parseConfiguration)
+        .compose(Service::initializeClients)
+        .compose(config -> Future.fromCompletionStage(ConfigUpdateThread.initialize()).map(config))
+        .compose(config -> Future.fromCompletionStage(WarmupRemoteFunctionThread.initialize()).map(config))
+        .compose(Service::initializeService)
+        .onFailure(t -> logger.error("Service startup failed", t))
+        .onSuccess(v -> logger.info("Service startup succeeded"));
   }
 
-  /**
-   *
-   */
-  private static void onConfigLoaded(AsyncResult<JsonObject> ar) {
-    final JsonObject config = ar.result();
+  protected static void initErrorManager() {
+    ErrorManager.loadErrors(ERROR_DEFINITIONS_FILE);
+    ErrorManager.registerGlobalPlaceholders(Map.of("featureContainerResource", "Space"));
+  }
+
+  private static Future<Vertx> initializeGlobalRouter(Vertx vertx) {
+    globalRouter = Router.router(vertx);
+    return Future.succeededFuture(vertx);
+  }
+
+  private static Future<JsonObject> parseConfiguration(JsonObject config) {
     configuration = config.mapTo(Config.class);
+    configuration.defaultStorageIds = Stream.of(configuration.DEFAULT_STORAGE_ID.split(",")).map(String::trim).collect(Collectors.toList());
 
-    initializeLogger(configuration);
-    decryptSecrets();
+    return Future.succeededFuture(config);
+  }
 
-    cacheClient = CacheClient.create();
-
+  private static Future<JsonObject> initializeClients(JsonObject config) {
+    volatileCacheClient = new MultiLevelCacheClient(InMemoryCacheClient.getInstance(), RedisCacheClient.getInstance());
+    staticCacheClient = new MultiLevelCacheClient(InMemoryCacheClient.getInstance(), S3CacheClient.getInstance());
+    MessageBroker.getInstance().onSuccess(mb -> {
+      messageBroker = mb;
+      Node.initialize();
+    });
     spaceConfigClient = SpaceConfigClient.getInstance();
     connectorConfigClient = ConnectorConfigClient.getInstance();
+    subscriptionConfigClient = SubscriptionConfigClient.getInstance();
+    tagConfigClient = TagConfigClient.getInstance();
+    settingsConfigClient = SettingsConfigClient.getInstance();
 
-    spaceConfigClient.init(spaceConfigReady -> {
-      if (spaceConfigReady.succeeded()) {
-        connectorConfigClient.init(connectorConfigReady -> {
-          if (connectorConfigReady.succeeded()) {
-            if (Service.configuration.INSERT_LOCAL_CONNECTORS) {
-              connectorConfigClient.insertLocalConnectors();
-            }
+    webClient = WebClient.create(vertx, new WebClientOptions()
+        .setUserAgent(XYZ_HUB_USER_AGENT)
+        .setTcpKeepAlive(configuration.HTTP_CLIENT_TCP_KEEPALIVE)
+        .setIdleTimeout(configuration.HTTP_CLIENT_IDLE_TIMEOUT)
+        .setTcpQuickAck(true)
+        .setTcpFastOpen(true)
+        .setPipelining(Service.configuration.HTTP_CLIENT_PIPELINING)
+    );
 
-            BurstAndUpdateThread.initialize();
+    return settingsConfigClient.init()
+        .compose(v -> settingsConfigClient.insertLocalSettings())
+        .compose(v -> spaceConfigClient.init())
+        .compose(v -> connectorConfigClient.init())
+        .compose(v -> Future.fromCompletionStage(connectorConfigClient.insertLocalConnectors()))
+        .compose(v -> subscriptionConfigClient.init())
+        .compose(v -> tagConfigClient.init())
+        .map(config)
+        .onFailure(t -> logger.error("initializeClients failed", t))
+        .onSuccess(v -> logger.info("initializeClients succeeded"));
+  }
 
-            vertx.deployVerticle(XYZHubRESTVerticle.class, new DeploymentOptions().setConfig(config).setWorker(true).setInstances(8));
+  private static Future<Void> initializeService(JsonObject config) {
+    if (StringUtils.isEmpty(Service.configuration.VERTICLES_CLASS_NAMES)) {
+      logger.error("At least one Verticle class name should be specified on VERTICLES_CLASS_NAMES. Service can't be started");
+      return Future.failedFuture("service initialization failed");
+    }
 
-            Logging.getLogger().info("XYZ Hub " + BUILD_VERSION + " was started at " + new Date().toString());
+    final List<String> verticlesClassNames = Arrays.asList(Service.configuration.VERTICLES_CLASS_NAMES.split(","));
+    int numInstances = Runtime.getRuntime().availableProcessors();
+    final DeploymentOptions options = new DeploymentOptions()
+        .setConfig(config)
+        .setWorker(false)
+        .setInstances(numInstances);
 
-            Thread.setDefaultUncaughtExceptionHandler((thread, t) -> Logging.getLogger().error("Uncaught exception: ", t));
+    final Promise<Void> sharedDataPromise = Promise.promise();
+    final Future<Void> sharedDataFuture = sharedDataPromise.future();
 
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-              //This may fail, if we are OOM, but lets at least try.
-              Logging.getLogger().info("XYZ Service is going down at " + new Date().toString());
-            }));
+    sharedDataFuture.compose(r -> {
+      final List<Future> futures = new ArrayList<>();
+
+      verticlesClassNames.forEach(className -> {
+        final Promise<AsyncResult<String>> deployVerticlePromise = Promise.promise();
+        futures.add(deployVerticlePromise.future());
+
+        logger.info("Deploying verticle: " + className);
+        vertx.deployVerticle(className, options, deployVerticleHandler -> {
+          if (deployVerticleHandler.failed()) {
+            logger.warn("Unable to load verticle class:" + className, deployVerticleHandler.cause());
           }
+          deployVerticlePromise.complete();
         });
-      }
+      });
+
+      return CompositeFuture.all(futures);
+    }).onComplete(done -> {
+      //At this point all verticles were initiated and all routers added as subrouter of globalRouter.
+      vertx.eventBus().publish(SHARED_DATA, GLOBAL_ROUTER);
+
+      logger.info("XYZ Hub " + buildVersion() + " was started at " + new Date().toString());
+      logger.info("Native transport enabled: " + vertx.isNativeTransportEnabled());
     });
-  }
 
-  private static void decryptSecrets() {
-    try {
-      configuration.STORAGE_DB_PASSWORD = decryptSecret(configuration.STORAGE_DB_PASSWORD);
-    } catch (CryptoException e) {
-      throw new RuntimeException("Error when trying to decrypt STORAGE_DB_PASSWORD.", e);
-    }
-    try {
-      configuration.ADMIN_MESSAGE_JWT = decryptSecret(configuration.ADMIN_MESSAGE_JWT);
-    } catch (CryptoException e) {
-      configuration.ADMIN_MESSAGE_JWT = null;
-      Logging.getLogger().error("Error when trying to decrypt ADMIN_MESSAGE_JWT. AdminMessaging won't work.", e);
-    }
-  }
+    final Hashtable<String, Object> sharedData = new Hashtable<>() {{
+      put(GLOBAL_ROUTER, globalRouter);
+    }};
+    //Shared data initialization
+    vertx.sharedData()
+        .getAsyncMap(SHARED_DATA, asyncMapResult -> asyncMapResult.result().put(SHARED_DATA, sharedData, sharedDataPromise));
 
-  private static String decryptSecret(String encryptedSecret) throws CryptoException {
-    if (ConfigDecryptor.isEncrypted(encryptedSecret)) {
-      return ConfigDecryptor.decryptSecret(encryptedSecret);
-    }
-    return encryptedSecret;
-  }
+    Thread.setDefaultUncaughtExceptionHandler((thread, t) -> logger.error("Uncaught exception: ", t));
 
-  private static void initializeLogger(Config config) {
-    if (!CONSOLE_LOG_CONFIG.equals(config.LOG_CONFIG)) {
-      Configurator.reconfigure(NetUtils.toURI(config.LOG_CONFIG));
-    }
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      stopMetricPublishers();
+      //This may fail, if we are OOM, but lets at least try.
+      logger.warn("XYZ Service is going down at " + new Date().toString());
+    }));
+
+    startMetricPublishers();
+
+    return sharedDataFuture;
   }
 
   public static String getHostname() {
@@ -220,7 +303,7 @@ public class Service implements Logging {
         try {
           Service.hostname = InetAddress.getLocalHost().getHostAddress();
         } catch (UnknownHostException e) {
-          Logging.getLogger().error("Unable to resolve the hostname using Java's API.", e);
+          logger.error("Unable to resolve the hostname using Java's API.", e);
           Service.hostname = "localhost";
         }
       }
@@ -228,71 +311,61 @@ public class Service implements Logging {
     return hostname;
   }
 
-  private static String getBuildProperty(String name) {
-    InputStream input = Service.class.getResourceAsStream("/build.properties");
-
-    // load a properties file
-    Properties buildProperties = new Properties();
-    try {
-      buildProperties.load(input);
-    } catch (IOException ignored) {
-    }
-
-    return buildProperties.getProperty(name);
+  public static long getUsedMemoryBytes() {
+    return Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
   }
 
-  private static long getBuildTime() {
-    String buildTime = getBuildProperty("xyzhub.buildTime");
+  public static float getUsedMemoryPercent() {
+    float used = getUsedMemoryBytes();
+    float total = Runtime.getRuntime().totalMemory();
+    return used / total * 100;
+  }
+
+  private static void startMetricPublishers() {
+    if (configuration.PUBLISH_METRICS) {
+      ConnectionMetrics.initialize();
+      metricPublishers.add(new CWBareValueMetricPublisher(new MemoryMetric("JvmMemoryUtilization")));
+      metricPublishers.add(new CWBareValueMetricPublisher(new MajorGcCountMetric("MajorGcCount")));
+      metricPublishers.add(new CWBareValueMetricPublisher(new GcDurationMetric("GcDuration")));
+      metricPublishers.add(new CWBareValueMetricPublisher(new GlobalUsedRfcConnections("GlobalUsedRfcConnections")));
+      metricPublishers.add(new CWBareValueMetricPublisher(new GlobalInflightRequestMemory("GlobalInflightRequestMemory")));
+      metricPublishers.addAll(ConnectionMetrics.startConnectionMetricPublishers());
+    }
+  }
+
+  private static boolean isUsingZgc() {
+    List<GarbageCollectorMXBean> gcMxBeans = ManagementFactory.getGarbageCollectorMXBeans();
+    for (GarbageCollectorMXBean gcMxBean : gcMxBeans) {
+      if (gcMxBean.getName().startsWith("ZGC")) {
+        logger.info("Service is using ZGC.");
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static void stopMetricPublishers() {
+    metricPublishers.forEach(MetricPublisher::stop);
+  }
+
+  public static int getPublicPort() {
+    if (configuration.XYZ_HUB_PUBLIC_ENDPOINT == null) return configuration.HTTP_PORT;
     try {
-      return new SimpleDateFormat("yyyy.MM.dd-HH:mm").parse(buildTime).getTime();
-    } catch (ParseException e) {
-      return 0;
+      URI endpoint = new URI(configuration.XYZ_HUB_PUBLIC_ENDPOINT);
+      int port = endpoint.getPort();
+      return port > 0 ? port : 80;
+    }
+    catch (URISyntaxException e) {
+      return configuration.HTTP_PORT;
     }
   }
 
   /**
-   * The service configuration.
+   * @return The "environment ID" of this service deployment.
    */
-  @JsonIgnoreProperties(ignoreUnknown = true)
-  public static class Config {
-    public int HTTP_PORT;
-    public String XYZ_HUB_REDIS_HOST;
-    public int XYZ_HUB_REDIS_PORT;
-    public String XYZ_HUB_S3_BUCKET;
-
-    public String JWT_PUB_KEY;
-    public Authorization.AuthorizationType XYZ_HUB_AUTH;
-    public String LOG_CONFIG;
-    public String LOGGING_TYPE;
-    public String LOG_PATH;
-    public boolean INSERT_LOCAL_CONNECTORS;
-    public String PSQL_HOST;
-
-    public String STORAGE_DB_URL;
-    public String STORAGE_DB_USER;
-    public String STORAGE_DB_PASSWORD;
-
-    public String SPACES_DYNAMODB_TABLE_ARN;
-    public String CONNECTORS_DYNAMODB_TABLE_ARN;
-    public String PACKAGES_DYNAMODB_TABLE_ARN;
-
-    public int INSTANCE_COUNT;
-    public ARN ADMIN_MESSAGE_TOPIC_ARN;
-    public String ADMIN_MESSAGE_JWT;
-    public int ADMIN_MESSAGE_PORT;
-
-    public String XYZ_HUB_PUBLIC_PROTOCOL;
-    public String XYZ_HUB_PUBLIC_HOST;
-    public int XYZ_HUB_PUBLIC_PORT;
-
-    public String HOST_NAME;
-
-    public int GLOBAL_MAX_QUEUE_SIZE; //MB
-    public int REMOTE_FUNCTION_REQUEST_TIMEOUT; //seconds
-
-    public String FS_WEB_ROOT;
-
-    public String HEALTH_CHECK_HEADER_NAME;
-    public String HEALTH_CHECK_HEADER_VALUE;
+  public static String getEnvironmentIdentifier() {
+    if (configuration.ENVIRONMENT_NAME == null) return "default";
+    if (configuration.AWS_REGION != null) return configuration.ENVIRONMENT_NAME + "_" + configuration.AWS_REGION;
+    return configuration.ENVIRONMENT_NAME;
   }
 }

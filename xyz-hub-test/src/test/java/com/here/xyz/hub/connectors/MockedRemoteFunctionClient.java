@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2020 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 package com.here.xyz.hub.connectors;
 
 import com.here.xyz.hub.connectors.models.Connector;
+import com.here.xyz.util.service.Core;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -27,10 +28,12 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import org.slf4j.Marker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 public class MockedRemoteFunctionClient extends RemoteFunctionClient {
 
+    private static final Logger logger = LogManager.getLogger();
     ScheduledThreadPoolExecutor threadPool;
     private long minExecutionTime = 0; //ms
     private long maxExecutionTime = 30_000; //ms
@@ -55,7 +58,7 @@ public class MockedRemoteFunctionClient extends RemoteFunctionClient {
     }
 
     @Override
-    protected void invoke(Marker marker, byte[] bytes, Handler<AsyncResult<byte[]>> callback) {
+    protected void invoke(FunctionCall fc, Handler<AsyncResult<byte[]>> callback) {
         long executionTime = (long) (Math.random() * (double) (maxExecutionTime - minExecutionTime) + minExecutionTime);
 
         MockedRequest req = new MockedRequest(callback) {
@@ -66,9 +69,9 @@ public class MockedRemoteFunctionClient extends RemoteFunctionClient {
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-                endTime = System.currentTimeMillis();
+                endTime = Core.currentTimeMillis();
                 long eT = this.endTime - this.startTime;
-                System.out.println("Request " + requestId + " was executed with desired executionTime: " + executionTime + "ms and actual eT: " + eT + "ms; relEndTime: " + (endTime - testStart));
+                logger.info("Request " + requestId + " was executed with desired executionTime: " + executionTime + "ms and actual eT: " + eT + "ms; relEndTime: " + (endTime - testStart));
                 callback.handle(Future.succeededFuture());
             }
         };
@@ -80,7 +83,7 @@ public class MockedRemoteFunctionClient extends RemoteFunctionClient {
     public static abstract class MockedRequest implements Runnable {
         Handler<AsyncResult<byte[]>> callback;
         String requestId = UUID.randomUUID().toString();
-        long startTime = System.currentTimeMillis();
+        long startTime = Core.currentTimeMillis();
         long endTime;
         public static long testStart;
 

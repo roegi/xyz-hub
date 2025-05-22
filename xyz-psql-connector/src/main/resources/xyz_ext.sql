@@ -1,59 +1,38 @@
--- SET search_path=xyz,h3,public,topology
+/*
+ * Copyright (C) 2017-2025 HERE Europe B.V.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ * License-Filename: LICENSE
+ */
+
+--
 -- CREATE EXTENSION IF NOT EXISTS postgis SCHEMA public;
 -- CREATE EXTENSION IF NOT EXISTS postgis_topology;
 -- CREATE EXTENSION IF NOT EXISTS tsm_system_rows SCHEMA public;
-
--- DROP FUNCTION xyz_index_status();
--- DROP FUNCTION xyz_create_idxs_over_dblink(text, integer, integer, text, text, text, integer, text);
--- DROP FUNCTION xyz_space_bbox(text, text, integer);
--- DROP FUNCTION xyz_update_dummy_v5();
--- DROP FUNCTION xyz_index_check_comments(text, text);
--- DROP FUNCTION xyz_index_creation_on_property_object(text, text, text, text, text, character);
--- DROP FUNCTION xyz_maintain_idxs_for_space(text, text);
--- DROP FUNCTION xyz_create_idxs_v2(text, integer, integer);
--- DROP FUNCTION xyz_property_path_to_array(text);
--- DROP FUNCTION xyz_property_path(text);
--- DROP FUNCTION xyz_property_datatype(text, text, text, integer);
--- DROP FUNCTION xyz_property_statistic(text, text, integer);
--- DROP FUNCTION xyz_statistic_newest_spaces_changes(text, text[], integer);
--- DROP FUNCTION xyz_write_newest_idx_analyses(text);
--- DROP FUNCTION xyz_write_newest_statistics(text, text[], integer);
--- DROP FUNCTION xyz_statistic_all_spaces(text, text[], integer);
--- DROP FUNCTION xyz_property_evaluation(text, text, text, integer);
--- DROP FUNCTION xyz_index_proposals_on_properties(text, text);
--- DROP FUNCTION xyz_index_creation_on_property(text, text, text, character);
--- DROP FUNCTION xyz_geotype(geometry);
--- DROP FUNCTION xyz_index_name_for_property(text, text, character);
--- DROP FUNCTION xyz_index_list_all_available(text, text);
--- DROP FUNCTION xyz_index_name_dissolve_to_property(text,text);
--- DROP FUNCTION xyz_index_property_available(text, text, text);
--- DROP FUNCTION xyz_property_statistic_v2(text, text, integer);
--- DROP FUNCTION xyz_tag_statistic(text, text, integer);
--- DROP FUNCTION xyz_statistic_searchable(jsonb);
--- DROP FUNCTION xyz_statistic_xl_space(text, text, integer);
--- DROP FUNCTION xyz_statistic_space(text, text);
--- DROP FUNCTION xyz_statistic_xs_space(text, text);
--- DROP FUNCTION xyz_create_idxs_for_space(text, text);
--- DROP FUNCTION xyz_remove_unnecessary_idx(text, integer);
--- DROP FUNCTION IF EXISTS xyz_qk_point2lrc(geometry, integer);
--- DROP FUNCTION IF EXISTS xyz_qk_lrc2qk(integer,integer,integer);
--- DROP FUNCTION IF EXISTS xyz_qk_qk2lrc(text );
--- DROP FUNCTION IF EXISTS xyz_qk_lrc2bbox(integer,integer,integer);
--- DROP FUNCTION IF EXISTS xyz_qk_qk2bbox(text );
--- DROP FUNCTION IF EXISTS xyz_qk_point2qk(geometry,integer );
--- DROP FUNCTION IF EXISTS xyz_qk_bbox2zooml(geometry);
 --
 ------ SAMPLE QUERIES ----
 ------ ENV: XYZ-CIT ; SPACE: QgQCHStH ; OWNER: psql
 ---------------------------------------------------------------------------------
 -- xyz_index_status							:	select * from xyz_index_status();
--- xyz_create_idxs_over_dblink				:	select xyz_create_idxs_over_dblink('xyz', 20, 0, 'psql', 'xxx', 'xyz', 5432, 'xyz,h3,public,topology');
+-- xyz_create_idxs_over_dblink				:	select xyz_create_idxs_over_dblink('xyz', 20, 0, 2, ARRAY['postgres'], 'psql', 'xxx', 'xyz', 'localhost', 5432, 'xyz,h3,public,topology');
 -- xyz_space_bbox							:	select * from xyz_space_bbox('xyz', 'QgQCHStH', 1000);
 -- xyz_update_dummy_v5						:	select xyz_update_dummy_v5();
 -- xyz_index_check_comments					:	select xyz_index_check_comments('xyz', 'QgQCHStH');
 -- xyz_index_creation_on_property_object	:	select xyz_index_creation_on_property_object('xyz','QgQCHStH', 'feature_type', 'idx_QgQCHStH_a306a6c_a', 'number', 'a');
 -- xyz_maintain_idxs_for_space				:	select xyz_maintain_idxs_for_space('xyz','QgQCHStH');
--- xyz_create_idxs_v2						:	select xyz_create_idxs_v2('public', 20, 0);
+-- xyz_create_idxs  						:	select xyz_create_idxs_v2('public', 20, 0, 0, ARRAY['postgres']);
 -- xyz_property_path_to_array				:	select * from xyz_property_path_to_array('foo.bar');
 -- xyz_property_path						:	select * from xyz_property_path('foo.bar');
 -- xyz_property_datatype					:	select * from xyz_property_datatype('xyz','QgQCHStH', 'feature_type', 1000);
@@ -83,6 +62,11 @@
 -- xyz_qk_grird								:	select xyz_qk_grird(3)
 -- xyz_qk_child_calculation					:	select select * from xyz_qk_child_calculation('012',3,null)
 -- xyz_count_estimation                     :   select xyz_count_estimation('select 1')
+-- xyz_index_get_plain_propkey              :   select xyz_index_get_plain_propkey('foo.bar::string')
+-- xyz_index_dissolve_datatype              :   select xyz_index_dissolve_datatype('foo.bar::array')
+--
+-- xyz_build_sortable_idx_values            :   select * from xyz_build_sortable_idx_values( '["pth1.pth2.field21:desc", "pth3.field22:asc", "field23:desc"]'::jsonb )
+--
 ---------------------------------------------------------------------------------
 ---------------------------------------------------------------------------------
 -- xyz_qk_point2lrc							:	select * from xyz_qk_point2lrc( ST_GeomFromText( 'POINT( -64.78767  32.29703)' ), 3 );
@@ -123,24 +107,183 @@
 ------------------------------------------------
 ------------------------------------------------
 ------------------------------------------------
-DROP FUNCTION IF EXISTS xyz_ensure_functions(text, text[]);
-DROP FUNCTION IF EXISTS xyz_update_dummy_v5();
-DROP FUNCTION IF EXISTS point2ridl(geometry,integer);
-DROP FUNCTION IF EXISTS rid2qidL( rid rid_t );
-DROP FUNCTION IF EXISTS qid2ridL( qid text );
-DROP FUNCTION IF EXISTS rid2bboxL( rid rid_t );
-DROP FUNCTION IF EXISTS qid2bboxL( qid text );
-DROP FUNCTION IF EXISTS point2qid( geo geometry(Point,4326), level integer );
-DROP FUNCTION IF EXISTS bbox2zooml( geometry );
-DROP TYPE IF EXISTS rid_t;
-------------------------------------------------
-------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_ext_version()
   RETURNS integer AS
 $BODY$
- select 122
+ select 209
 $BODY$
   LANGUAGE sql IMMUTABLE;
+------------------------------------------------
+------------------------------------------------
+DROP FUNCTION IF EXISTS xyz_reduce_precision(geo GEOMETRY);
+
+CREATE OR REPLACE FUNCTION xyz_reduce_precision(geo GEOMETRY, enable_logging boolean = TRUE)
+    RETURNS GEOMETRY AS
+$BODY$
+DECLARE
+ sgeo geometry;
+BEGIN
+
+  if not st_isvalid(geo) then
+   RETURN geo;
+  end if;
+
+  sgeo := st_geomfromtext(st_astext(ST_SnapToGrid(geo, 0.00000001),8),4326); -- ST_ReducePrecision(geo, 0.00000001);
+
+  IF GeometryType(sgeo) = GeometryType(geo) THEN
+   RETURN sgeo;  -- only if type did not changed
+  ELSE
+   RETURN geo;
+  END IF;
+
+  EXCEPTION WHEN OTHERS THEN
+    IF enable_logging THEN
+        RAISE WARNING 'xyz_reduce_precision: Invalid geometry detected: %',ST_AsGeoJson(geo);
+    END IF;
+
+  RETURN geo;
+
+END
+$BODY$
+LANGUAGE plpgsql immutable;
+
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_import_trigger()
+ RETURNS trigger
+AS $BODY$
+	DECLARE
+        spaceId text := TG_ARGV[0];
+		addSpaceId boolean := TG_ARGV[1];
+		curVersion bigint := TG_ARGV[3];
+		author text := TG_ARGV[4];
+
+		fid text := NEW.jsondata->>'id';
+		createdAt BIGINT := FLOOR(EXTRACT(epoch FROM NOW()) * 1000);
+		meta jsonb := format(
+			'{
+                 "createdAt": %s,
+                 "updatedAt": %s
+			}', createdAt, createdAt
+        );
+    BEGIN
+		-- Inject id if not available
+		IF fid IS NULL THEN
+		    fid = xyz_random_string(10);
+			NEW.jsondata := (NEW.jsondata || format('{"id": "%s"}', fid)::jsonb);
+        END IF;
+
+		IF addSpaceId THEN
+			meta := jsonb_set(meta, '{space}', to_jsonb(spaceId));
+        END IF;
+
+		-- remove bbox on root
+        NEW.jsondata := NEW.jsondata - 'bbox';
+
+        -- Inject type
+        NEW.jsondata := jsonb_set(NEW.jsondata, '{type}', '"Feature"');
+
+		-- Inject meta
+		NEW.jsondata := jsonb_set(NEW.jsondata, '{properties,@ns:com:here:xyz}', meta);
+
+		IF NEW.jsondata->'geometry' IS NOT NULL AND NEW.geo IS NULL THEN
+		--GeoJson Feature Import
+			NEW.geo := ST_Force3D(ST_GeomFromGeoJSON(NEW.jsondata->'geometry'));
+			NEW.jsondata := NEW.jsondata - 'geometry';
+        ELSE
+			NEW.geo := ST_Force3D(NEW.geo);
+        END IF;
+
+		NEW.geo := xyz_reduce_precision(NEW.geo, false);
+
+        NEW.operation := 'I';
+        NEW.version := curVersion;
+        NEW.id := fid;
+		NEW.author := author;
+
+        RETURN NEW;
+    END;
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR  REPLACE FUNCTION xyz_random_string(length integer)
+    RETURNS text AS
+$BODY$
+    DECLARE
+        chars text[] := '{0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z}';
+        result text := '';
+        i integer := 0;
+    BEGIN
+            IF length < 0 THEN
+                RAISE EXCEPTION 'Given length cannot be less than 0';
+        END IF;
+        FOR i IN 1..length LOOP
+            result := result || chars[1+random()*(array_length(chars, 1)-1)];
+        END LOOP;
+
+        RETURN result;
+    END;
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_index_dissolve_datatype(propkey text)
+  RETURNS text AS
+$BODY$
+	/**
+	* Description: Get a specified datatype from a propkey.
+	*
+	*		prefix = foo.bar::array => array
+	*
+	* Parameters:
+	*   		@propkey - path of json-key inside jsondata->'properties' object (eg. foo | foo.bar)
+	*
+	* Returns:
+	*   datatype	- array / object / string / number / boolean
+	*/
+	DECLARE datatype TEXT;
+
+	BEGIN
+		IF (POSITION('::' in propkey) > 0) THEN
+			datatype :=  lower(substring(propkey, position('::' in propkey)+2));
+			IF datatype IN ('object','array','number','string','boolean') THEN
+				RETURN datatype;
+			END IF;
+		END IF;
+		RETURN NULL;
+	END;
+$BODY$
+  LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_index_get_plain_propkey(propkey text)
+  RETURNS text AS
+$BODY$
+	/**
+	* Description: Get the plain propkey.
+	*
+	*		prefix = foo.bar::array => foo.bar
+	*
+	* Parameters:
+	*   		@propkey - path of json-key inside jsondata->'properties' object (eg. foo | foo.bar)
+	*
+	* Returns:
+	*   propkey	- json-key without datatype
+	*/
+	DECLARE datatype TEXT;
+
+	BEGIN
+		IF (POSITION('::' in propkey) > 0) THEN
+			datatype :=  lower(substring(propkey, position('::' in propkey)+2));
+			IF datatype IN ('object','array','number','string','boolean') THEN
+				return substring(propkey, 0, position('::' in propkey));
+			END IF;
+		END IF;
+		RETURN propkey;
+	END;
+$BODY$
+  LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_count_estimation(query text)
@@ -154,9 +297,9 @@ BEGIN
             rows := substring(rec."QUERY PLAN" FROM ' rows=([[:digit:]]+)');
             EXIT WHEN rows IS NOT NULL;
         END LOOP;
-    IF ROWS <= 1 THEN
-        RETURN null;
-    END IF;
+    --IF ROWS <= 1 THEN
+    --    RETURN null;
+    --END IF;
     RETURN rows;
 END;
 $BODY$
@@ -176,10 +319,6 @@ BEGIN
 
 	resolution := resolution-1;
 	LOOP
-		IF resolution = 0 THEN
-			select into result array_append(result, concat(quadkey,i));
-		END IF;
-
 		select into result xyz_qk_child_calculation(concat(quadkey,i),resolution,result);
 
 		EXIT WHEN i = 3;
@@ -191,8 +330,47 @@ $BODY$
 LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_status()
--- DROP FUNCTION xyz_index_status();
+create or replace function xyz_qk_envelope2lrc(geo geometry, lvl integer)
+    returns table(rowy integer, colx integer, level integer) as
+$body$
+declare
+    ibox geometry := st_envelope( geo );
+	topLeft geometry := st_setsrid( st_point( st_xmin(ibox), st_ymax(ibox)),4326);
+	botright geometry := st_setsrid( st_point( st_xmax(ibox), st_ymin(ibox) ),4326);
+    numrowscols constant integer := 1 << lvl;
+	tl record;
+	br record;
+    bColX integer := 0;
+	saveCounter integer := 0;
+begin
+ level = lvl;
+ tl = xyz_qk_point2lrc(topLeft,lvl);
+ br = xyz_qk_point2lrc(botright,lvl);
+ bColX = br.colx;
+
+ if( br.colx < tl.colx ) then
+  bColX = br.colx + numrowscols;
+ end if;
+ for i in tl.rowy .. br.rowy loop
+  for j in tl.colx .. bColX loop
+   rowy = i;
+   colx = (j % numrowscols);
+   saveCounter = saveCounter + 1;
+
+   if( saveCounter < 10000 ) then
+    return next;
+   else
+    return;
+   end if;
+
+  end loop;
+ end loop;
+
+end;
+$body$
+language plpgsql immutable;
+------------------------------------------------
+------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_index_status()
   RETURNS INTEGER AS
 $BODY$
@@ -219,13 +397,12 @@ $BODY$
 
 		/**
 		* If count is set to 16, whole indexing (auto / on-demand) is deactivated
-		* If count is set to 32, only on-demand indexing is activated. (auto-indexing disabled)
 		*/
 		SELECT count into status
 			from xyz_config.xyz_idxs_status
 				WHERE spaceid='idx_in_progress';
 
-		IF status != 0 THEN
+		IF status = 16 THEN
 			RETURN status;
 		END IF;
 
@@ -236,7 +413,7 @@ $BODY$
 			SELECT
 			  (CASE WHEN (position('xyz_write_newest_statistics' IN query) > 0) THEN 1 ELSE 0 END)::bit as statitics_running ,
 			  (CASE WHEN(position('xyz_write_newest_idx_analyses' IN query) > 0) THEN 1 ELSE 0 END)::bit as analyses_running ,
-			  (CASE WHEN (position('xyz_create_idxs_over_dblink' IN query) > 0) THEN 1 ELSE 0 END)::bit as idx_running,
+			  (CASE WHEN (position('xyz_create_idxs' IN query) > 0) THEN 1 ELSE 0 END)::bit as idx_running,
 			  pid,
 			  now() - pg_stat_activity.query_start AS duration,
 			  query,
@@ -251,15 +428,16 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_create_idxs_over_dblink(text, integer, integer, text, text, text, integer, text)
--- DROP FUNCTION xyz_create_idxs_over_dblink(text, integer, integer, text, text, text, integer, text);
 CREATE OR REPLACE FUNCTION xyz_create_idxs_over_dblink(
 	schema text,
 	lim integer,
 	off integer,
+	mode integer,
+    owner_list text[],
 	usr text,
 	pwd text,
 	dbname text,
+	host text,
 	port integer,
 	searchp text)
 		RETURNS void AS
@@ -271,18 +449,20 @@ CREATE OR REPLACE FUNCTION xyz_create_idxs_over_dblink(
 		*   @schema	- schema in which the xyz-spaces are located
 		*   @lim 	- max amount of spaces to iterate over
 		*   @off 	- offset, required for parallel executions
-		*	@usr 	- database user
-		*	@pwd	- database user password
-		*	@dbname	- database name
-		*	@port	- database port
-		*	@searchp	- searchpath
+		*   @mode 	- 0 = only indexing, 1 = statistics+indexing, 2 = statistic, analyzing, indexing (auto-indexing)
+		*   @owner_list	- list of database users which has the tables created (owner). Normally is this only one user.
+		*   @usr 	- database user
+		*   @pwd	- database user password
+		*   @dbname	- database name
+		*   @port	- database port
+		*   @searchp	- searchpath
 		*/
 
 		DECLARE
-			v_conn_str  text := 'port='||port||' dbname='||dbname||' host=localhost user='||usr||' password='||pwd||' options=-csearch_path='||searchp||'';
+			v_conn_str  text := 'port='||port||' dbname='||dbname||' host='||host||' user='||usr||' password='||pwd||' options=-csearch_path='||searchp||'';
 			v_query     text;
 		BEGIN
-			v_query := 'select xyz_create_idxs_v2('''||schema||''',100, 0)';
+			v_query := 'select xyz_create_idxs('''||schema||''',100, 0, '||mode||', '''||owner_list::text||''')';
 			/** Requires the installed dblink extension - we use dblink to avoid connection interruption through Lambda termination */
 			PERFORM * FROM dblink(v_conn_str, v_query) AS t1(test text);
 		END;
@@ -290,8 +470,6 @@ CREATE OR REPLACE FUNCTION xyz_create_idxs_over_dblink(
 LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_space_bbox(text, text, integer)
--- DROP FUNCTION xyz_space_bbox(text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_space_bbox(
     schema text,
     space_id text,
@@ -343,10 +521,67 @@ $BODY$
         END;
 $BODY$
   LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_index_list_all_available(
+    IN schema text,
+    IN spaceid text)
+  RETURNS TABLE(idx_name text, idx_property text, src character) AS
+$BODY$
+	/**
+	* Description: This function return all properties which are indexed.
+	*
+	* Parameters:
+	*   @schema			- schema in which the XYZ-spaces are located
+	*   @spaceid		- id of XYZ-space (tablename)
+	*
+	* Returns (table):
+	*	idx_name		- Index-name
+	*	idx_property	- Property name on which the Index is based on
+	*	src				- source (a - automatic ; m - manual; s - system/unknown)
+	*/
+
+	DECLARE
+		/** blacklist of XYZ-System indexes */
+		ignore_idx text := 'NOT IN(''id'',''tags'',''geo'',''serial'')';
+		av_idx_list record;
+		comment_prefix text:='p.name=';
+	BEGIN
+	    spaceid := xyz_get_root_table(spaceid);
+		FOR av_idx_list IN
+			   SELECT indexname, substring(indexname from char_length(spaceid) + 6) as idx_on, COALESCE((SELECT source from xyz_index_name_dissolve_to_property(indexname,spaceid)),'s') as source
+				FROM pg_indexes
+					WHERE
+				schemaname = ''||schema||'' AND tablename = ''||spaceid||'' AND starts_with(indexname, 'idx_')
+		LOOP
+			src := av_idx_list.source;
+			idx_name := av_idx_list.indexname;
+
+			BEGIN
+				/** Check if comment with the property-name is present */
+				select * into idx_property
+					from obj_description( (concat('"',av_idx_list.indexname,'"')::regclass ));
+
+				EXCEPTION WHEN OTHERS THEN
+					/** do nothing - This Index is not a property index! */
+			END;
+
+			IF idx_property IS NOT null THEN
+				IF (position(''||comment_prefix||'' in ''||idx_property||'')) != 0 THEN
+					/** we found the name of the property in the comment */
+					idx_property := substring(idx_property, char_length(''||comment_prefix||'')+1);
+				END IF;
+			ELSE
+				idx_property := av_idx_list.idx_on;
+			END IF;
+
+			RETURN NEXT;
+		END LOOP;
+	END
+$BODY$
+  LANGUAGE plpgsql VOLATILE;
  ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_check_comments(text, text)
--- DROP FUNCTION xyz_index_check_comments(text, text);
 CREATE OR REPLACE FUNCTION xyz_index_check_comments(
     schema text,
     space_id text)
@@ -422,8 +657,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_creation_on_property_object(text, text, text, text, text, character);
--- DROP FUNCTION xyz_index_creation_on_property_object(text, text, text, text, text, character);
 CREATE OR REPLACE FUNCTION xyz_index_creation_on_property_object(
     schema text,
     spaceid text,
@@ -453,38 +686,177 @@ $BODY$
 	*/
 
 	DECLARE
+        root_path text := '''properties''->';
 		prop_path text;
 		idx_type text := 'btree';
 	BEGIN
 		source = lower(source);
-		select into prop_path concat('''',replace(propkey, '.', '''->'''),'''');
+		prop_path := '''' || replace( regexp_replace( xyz_index_get_plain_propkey(propkey),'^f\.',''),'.','''->''') || '''';
 
-		IF source not in ('a','m') THEN
-			RAISE NOTICE 'Source ''%'' not supported. Use ''m'' for manual or ''a'' for automatic!',source;
-		END IF;
+        /** root level property detected */
+        IF (lower(SUBSTRING(propkey from 0 for 3)) = 'f.') THEN
+            root_path:='';
+        END IF;
+
+        IF source not in ('a','m') THEN
+            RAISE NOTICE 'Source ''%'' not supported. Use ''m'' for manual or ''a'' for automatic!',source;
+        END IF;
 
 		/** In all other cases we are using btree */
 		IF datatype = 'array' THEN
 			idx_type = 'GIN';
 		END IF;
 
-		EXECUTE format('CREATE INDEX "%s" '
-				||'ON %s."%s" '
-				||' USING %s '
-				||'((jsondata->''properties''->%s))', idx_name, schema, spaceid, idx_type, prop_path);
+        IF propkey = 'f.geometry.type' THEN
+            /** special handling for geometryType */
+            EXECUTE format('CREATE INDEX IF NOT EXISTS "%s" '
+                ||'ON %s."%s" '
+                ||' USING btree '
+                ||' (GeometryType(geo))', idx_name, schema, spaceid, idx_type);
+        ELSE
+            EXECUTE format('CREATE INDEX IF NOT EXISTS "%s" '
+                ||'ON %s."%s" '
+                ||' USING %s '
+                ||'((jsondata->%s %s))', idx_name, schema, spaceid, idx_type, root_path, prop_path);
+        END IF;
 
 		EXECUTE format('COMMENT ON INDEX %s."%s" '
 				||'IS ''p.name=%s''',
-			schema, idx_name, propkey);
+			schema, idx_name, xyz_index_get_plain_propkey(propkey));
 
 		RETURN idx_name;
 	END
 $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
+--- Begin : sortable indexes
 ------------------------------------------------
--- Function: xyz_maintain_idxs_for_space(text, text)
--- DROP FUNCTION xyz_maintain_idxs_for_space(text, text);
+
+create or replace function xyz_build_sortable_idx_values( sortby_arr jsonb, out iname text, out icomment text, out ifields text )
+as
+$body$
+declare
+ selem record;
+ dflip boolean := false;
+ direction text := '';
+ idx_postfix text := '';
+ comma text := '';
+ pathname text := '';
+ fullpathname text := '';
+ jpth text := '';
+ jseg text := '';
+begin
+
+ icomment = '';
+ ifields = '';
+
+ for selem in
+  select row_number() over () as pos, el::text as sentry, el::text ~* '^".+:desc"$' as isdesc from jsonb_array_elements( sortby_arr ) el
+ loop
+
+  if selem.pos = 1 and selem.isdesc then
+	 dflip = true;
+	end if;
+
+	if selem.isdesc != dflip then
+	 direction = 'desc';
+	 idx_postfix = idx_postfix || '0';
+	else
+	 direction = '';
+	 idx_postfix = idx_postfix || '1';
+	end if;
+
+	if length( icomment ) > 0 then
+	 comma = ',';
+	end if;
+
+	pathname = regexp_replace(selem.sentry, '^"([^:]+)(:(asc|desc))*"$','\1','i');
+
+	if pathname ~ '^f\.(createdAt|updatedAt)' then
+	 fullpathname = regexp_replace(pathname,'^f\.','properties.@ns:com:here:xyz.');
+	elsif pathname ~ '^f\.' then
+	 fullpathname = regexp_replace(pathname,'^f\.','');
+	else
+	 fullpathname = 'properties.' || pathname;
+	end if;
+
+	jpth = 'jsondata';
+	foreach jseg in array regexp_split_to_array(fullpathname,'\.')
+	loop
+	 jpth = format('(%s->''%s'')',jpth, jseg );
+	end loop;
+
+	ifields = ifields || format('%s %s,',jpth,direction);
+
+	icomment = icomment || format('%s%s%s',comma, pathname , replace(direction,'desc',':desc'));
+
+ end loop;
+
+ ifields = format('%s (jsondata->>''id'') %s', ifields, direction );
+ iname = format('idx_#spaceid#_%s_o%s', substr( md5( icomment ),1,7), idx_postfix );
+
+end;
+$body$
+language plpgsql immutable;
+
+
+create or replace function xyz_eval_o_idxs( schema text, space text )
+ returns table ( iexists text, iproperty text, src character, iname text, icomment text, ifields text ) as
+$body$
+ with
+  indata as ( select xyz_eval_o_idxs.schema as schema, xyz_eval_o_idxs.space as space ),
+  availidx as ( select idx_name as iexists, idx_property as iproperty, src  from ( select (xyz_index_list_all_available( i.schema, i.space )).* from indata i ) r where src = 'o' ),
+  reqidx as ( select distinct on (iname) replace(iname,'#spaceid#', o.space ) as iname, icomment, ifields
+			  from
+			  ( select i.space, (xyz_build_sortable_idx_values( jsonb_array_elements( nullif( s.idx_manual->'sortableProperties', 'null' ) ) )).*
+                from xyz_config.xyz_idxs_status s, indata i
+                where s.idx_creation_finished = false
+                and s.spaceid = i.space
+			  ) o
+ 		    )
+ select e.iexists, e.iproperty, e.src, r.iname, r.icomment, r.ifields
+ from availidx e full join reqidx r on ( e.iexists = r.iname )
+ where 1 = 1
+   and ((e.iexists is null) or (r.iname is null))
+ order by e.iexists, r.iname
+$body$
+language sql immutable;
+
+
+create or replace function xyz_maintain_o_idxs_for_space( schema text, space text)
+  returns void as
+$body$
+ declare
+  indata record;
+ begin
+  for indata in
+	 select * from xyz_eval_o_idxs( schema, space )
+  loop
+
+   if indata.iexists is not null then
+
+    raise notice '-- PROPERTY: % | SORTABLE | SPACE: % |> DELETE IDX: %!', indata.iproperty, space, indata.iexists;
+	execute format('drop index if exists %s."%s" ', schema, indata.iexists );
+
+   elsif indata.iname is not null then
+
+	raise notice '-- PROPERTY: % | SORTABLE | SPACE: % |> CREATE SORT IDX: %!', indata.icomment, space, indata.iname;
+    execute format('create index "%s" on %s."%s" using btree (%s) ', indata.iname, schema, space, indata.ifields );
+    execute format('comment on index %s."%s" is ''%s''', schema, indata.iname, indata.icomment );
+
+   end if;
+
+  end loop;
+ end;
+$body$
+language plpgsql volatile;
+
+------------------------------------------------
+--- End : sortable indexes
+------------------------------------------------
+
+------------------------------------------------
+------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_maintain_idxs_for_space(
     schema text,
     space text)
@@ -501,21 +873,36 @@ $BODY$
 	*   @schema	- schema in which the XYZ-spaces are located
 	*   @space - id of the XYZ-space (tablename)
 	*/
+    DECLARE xyz_space_exists record;
 
 	DECLARE xyz_space_stat record;
 	DECLARE xyz_manual_idx record;
 	DECLARE xyz_needless_manual_idx record;
+    DECLARE xyz_needless_auto_idx record;
 
 	DECLARE xyz_idx_proposal record;
 	DECLARE idx_false_list TEXT[];
+    DECLARE is_auto_indexing boolean;
 
 	BEGIN
-		/** set indication that idx creation is running */
-		UPDATE xyz_config.xyz_idxs_status
-			SET idx_creation_finished = false
-				WHERE spaceid = space;
+		/** Check if table is present */
+		select 1 into xyz_space_exists
+			from pg_tables WHERE tablename =space and schemaname = schema;
+		IF xyz_space_exists IS NULL THEN
+			DELETE FROM xyz_config.xyz_idxs_status
+				WHERE spaceid = space
+					AND schem = schema
+                    AND idx_manual IS NULL
+                    AND auto_indexing IS NULL;
+			RAISE NOTICE 'SPACE DOES NOT EXIST %."%" ', schema, space;
+			RETURN;
+		END IF;
 
-		EXECUTE xyz_index_check_comments(schema, space);
+		/** set indication that idx creation is running */
+        UPDATE xyz_config.xyz_idxs_status
+            SET idx_creation_finished = false
+        WHERE spaceid = space AND schem = schema;
+		--EXECUTE xyz_index_check_comments(schema, space);
 
 		/** Analyze IDX-ON DEMAND aka MANUAL MODE */
 		RAISE NOTICE 'ANALYSE MANUAL IDX on SPACE: %', space;
@@ -528,12 +915,12 @@ $BODY$
 				(SELECT * from xyz_index_property_available(schema, space, property)) as idx_available
 					from (
 				SELECT
-					(jsonb_each(idx_manual)).key as property,
-					(jsonb_each(idx_manual)).value::text::boolean as idx_required
+				    (jsonb_each( case when idx_manual ? 'searchableProperties' then nullif( idx_manual->'searchableProperties', 'null' ) else idx_manual end )).key as property,
+                    (jsonb_each( case when idx_manual ? 'searchableProperties' then nullif( idx_manual->'searchableProperties', 'null' ) else idx_manual end )).value::text::boolean as idx_required
 						FROM xyz_config.xyz_idxs_status
 					WHERE idx_creation_finished = false
-						--AND count >= 10
 						AND spaceid = space
+                        AND schem = schema
 			) A
 		LOOP
 			IF xyz_manual_idx.idx_required = false THEN
@@ -560,31 +947,48 @@ $BODY$
 
 		/** Search created ON-DEMAND IDXs which are no longer getting used */
 		FOR xyz_needless_manual_idx IN
-			SELECT idx_property as prop, idx_name FROM (
-				SELECT idx_property,idx_name,
-				(
-					SELECT property=idx_property as idx_manual_prop FROM (
-						SELECT  (jsonb_each(idx_manual)).key as property,
-							(jsonb_each(idx_manual)).value::text::boolean as idx_required
-						FROM xyz_config.xyz_idxs_status
-							where spaceid = space
-					)A WHERE property=idx_property
-				)
+			SELECT idx_name, idx_property
 				FROM xyz_index_list_all_available(schema,space)
-				      WHERE src='m'
-			) A WHERE idx_manual_prop is null
+					WHERE src='m'
+			EXCEPT
+			SELECT idx_name, idx_property FROM(
+				SELECT  xyz_index_get_plain_propkey((jsonb_each( case when idx_manual ? 'searchableProperties' then nullif( idx_manual->'searchableProperties', 'null' ) else idx_manual end )).key) as idx_property,
+					xyz_index_name_for_property(space, (jsonb_each( case when idx_manual ? 'searchableProperties' then nullif( idx_manual->'searchableProperties', 'null' ) else idx_manual end )).key, 'm') as idx_name,
+					(jsonb_each( case when idx_manual ? 'searchableProperties' then nullif( idx_manual->'searchableProperties', 'null' ) else idx_manual end )).value::text::boolean as idx_required
+					FROM xyz_config.xyz_idxs_status
+						where spaceid = space
+                          AND schem = schema
+			) A WHERE idx_required = true
 		LOOP
-			RAISE NOTICE '-- PROPERTY: % | SPACE: % |> DELETE UNWANTED IDX: %!',xyz_needless_manual_idx.prop, space, xyz_needless_manual_idx.idx_name;
+			RAISE NOTICE '-- PROPERTY: % | SPACE: % |> DELETE UNWANTED IDX: %!',xyz_needless_manual_idx.idx_property, space, xyz_needless_manual_idx.idx_name;
 			EXECUTE FORMAT ('DROP INDEX IF EXISTS %s."%s" ', schema, xyz_needless_manual_idx.idx_name);
 		END LOOP;
 
-		/** Analyze IDX-Proposals aka AUTOMATIC MODE */
+        /** Check if auto-indexing is turned off - if yes, delete auto-indices */
+        select auto_indexing from xyz_config.xyz_idxs_status into is_auto_indexing where spaceid = space;
+
+        IF is_auto_indexing = false THEN
+            BEGIN
+                FOR xyz_needless_auto_idx IN
+                    SELECT idx_name, idx_property
+                    FROM xyz_index_list_all_available(schema,space)
+                    WHERE src='a'
+                        LOOP
+                            RAISE NOTICE '-- PROPERTY: % | SPACE: % |> DELETE UNWANTED AUTO-IDX: %!',xyz_needless_auto_idx.idx_property, space, xyz_needless_auto_idx.idx_name;
+                    EXECUTE FORMAT ('DROP INDEX IF EXISTS %s."%s" ', schema, xyz_needless_auto_idx.idx_name);
+                END LOOP;
+            END;
+        END IF;
+
+        /** Analyze IDX-Proposals aka AUTOMATIC MODE */
 		SELECT * FROM xyz_config.xyz_idxs_status
 			INTO xyz_space_stat
 				WHERE idx_proposals IS NOT NULL
 			AND idx_creation_finished = false
+            AND (auto_indexing IS NULL OR auto_indexing = true)
 			AND count >= 0
-			AND spaceid = space;
+			AND spaceid = space
+            AND schem = schema;
 
 		IF xyz_space_stat.idx_proposals IS NOT NULL THEN
 			RAISE NOTICE 'ANALYSE AUTOMATIC IDX PROPOSALS: % on SPACE:%', xyz_space_stat.idx_proposals, space;
@@ -605,34 +1009,37 @@ $BODY$
 
 			BEGIN
 				RAISE NOTICE '--PROPERTY: % | TYPE: % | SPACE: % |> CREATE AUTOMATIC IDX!',xyz_idx_proposal.property, xyz_idx_proposal.type, space;
-				PERFORM xyz_index_creation_on_property(schema,space, xyz_idx_proposal.property,'a');
+				PERFORM xyz_index_creation_on_property(schema, space, xyz_idx_proposal.property,'a');
 
 				EXCEPTION WHEN OTHERS THEN
 					RAISE NOTICE '--PROPERTY: % | TYPE: % | SPACE: % |> IDX CREATION ERROR -> SKIP!',xyz_idx_proposal.property, xyz_idx_proposal.type, space;
 			END;
 		END LOOP;
 
+        perform xyz_maintain_o_idxs_for_space( schema, space );
+
 		/** set indication that idx creation is finished */
 		UPDATE xyz_config.xyz_idxs_status
 			SET idx_creation_finished = true,
 				idx_proposals = null,
 			    idx_available = (select jsonb_agg(FORMAT('{"property":"%s","src":"%s"}',idx_property, src)::jsonb) from (
-				select * from xyz_index_list_all_available(schema,space)
+				select * from xyz_index_list_all_available(schema, space)
 					order by idx_property
 			)b
 		)
-		WHERE spaceid = space;
+		WHERE spaceid = space
+          AND schem = schema;
 	END;
 $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_create_idxs_v2(text, integer, integer)
--- DROP FUNCTION xyz_create_idxs_v2(text, integer, integer);
-CREATE OR REPLACE FUNCTION xyz_create_idxs_v2(
+CREATE OR REPLACE FUNCTION xyz_create_idxs(
     schema text,
     lim integer,
-    off integer)
+    off integer,
+    mode integer,
+    owner_list text[])
   RETURNS void AS
 $BODY$
 	/**
@@ -647,16 +1054,28 @@ $BODY$
 
 	DECLARE xyz_space_stat record;
 	DECLARE xyz_idx_proposal record;
+	DECLARE big_space_threshold integer := 10000;
 
 	BEGIN
+		IF mode = 1 OR mode = 2 THEN
+			RAISE NOTICE 'WRITE NEWEST STATISTICS!';
+			PERFORM xyz_write_newest_statistics(schema, owner_list, big_space_threshold);
+		END IF;
+
+		IF mode = 2 THEN
+			RAISE NOTICE 'WRITE NEWEST ANALYSES!';
+			PERFORM xyz_write_newest_idx_analyses(schema);
+		END IF;
+
 		FOR xyz_space_stat IN
-			SELECT * FROM xyz_config.xyz_idxs_status
-				WHERE count > 0
-					AND idx_creation_finished = false
-					AND count < 5000000
-					AND schem = schema
-				 ORDER BY count, spaceid
-					LIMIT lim OFFSET off
+			SELECT * FROM xyz_config.xyz_idxs_status A
+				LEFT JOIN pg_tables B ON (B.tablename = A.spaceid)
+			WHERE
+				idx_creation_finished = false
+				AND b.tablename is not null
+				AND schem = schema
+			 ORDER BY count, spaceid
+				LIMIT lim OFFSET off
 		LOOP
 			RAISE NOTICE 'MAINTAIN IDX FOR: % !',xyz_space_stat.spaceid;
 			PERFORM xyz_maintain_idxs_for_space(schema, xyz_space_stat.spaceid);
@@ -666,8 +1085,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_property_path_to_array(text)
--- DROP FUNCTION xyz_property_path_to_array(text);
 CREATE OR REPLACE FUNCTION xyz_property_path_to_array(propertypath text)
   RETURNS text[] AS
 $BODY$
@@ -697,8 +1114,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_property_path(text)
--- DROP FUNCTION xyz_property_path(text);
 CREATE OR REPLACE FUNCTION xyz_property_path(propertypath TEXT)
   RETURNS TEXT AS
 $BODY$
@@ -730,8 +1145,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_property_datatype(text, text, text, integer)
--- DROP FUNCTION xyz_property_datatype(text, text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_property_datatype(
 	schema text,
     spaceid text,
@@ -752,10 +1165,14 @@ $BODY$
 	*	datatype		- string | number | boolean | object | array | null
 	*/
 
-	DECLARE datatype TEXT;
+	DECLARE datatype TEXT := xyz_index_dissolve_datatype(propertypath);
 	DECLARE json_proppath TEXT;
 
 	BEGIN
+		IF (datatype IS NOT NULL) THEN
+			RETURN datatype;
+		END IF;
+
 		SELECT xyz_property_path(propertypath) into json_proppath;
 
 		EXECUTE format('SELECT jsonb_typeof((jsondata->''properties''->%s)::jsonb)::text '
@@ -776,8 +1193,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_property_statistic(text, text, integer)
--- DROP FUNCTION xyz_property_statistic(text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_property_statistic_v2(
     IN schema text,
     IN spaceid text,
@@ -809,8 +1224,8 @@ $BODY$
 		idxlist jsonb;
 	BEGIN
 		SELECT COALESCE(jsonb_agg(idx_property),'""'::jsonb) into idxlist
-			FROM( select idx_property from xyz_index_list_all_available($1,$2)
-		WHERE src IN ('a','m') )A;
+			FROM( select distinct split_part(idx_property,',',1) as idx_property from xyz_index_list_all_available($1,$2)
+		WHERE src IN ('a','m','o') and not idx_property ~ '^f\..*'  ) A;
 
 		IF tablesamplecnt is NULL
 			THEN
@@ -823,13 +1238,13 @@ $BODY$
 					|| '		true as searchable, '
 					|| '		(SELECT * from xyz_property_datatype('''||schema||''','''||spaceid||''', propkey, 1000)) as datatype '
 					|| '	   FROM( '
-					|| '		select idx_property as propkey from xyz_index_list_all_available('''||schema||''','''||spaceid||''') '
-					|| '			WHERE src IN (''a'',''m'') '
+					|| '		select distinct split_part(idx_property,'','',1) as propkey from xyz_index_list_all_available('''||schema||''','''||spaceid||''') '
+					|| '			WHERE src IN (''a'',''m'', ''o'') '
 					|| '	   ) B group by propkey '
 					|| '	UNION '
 					|| '	SELECT  propkey, '
 					|| '		COALESCE(COUNT(*)::numeric::INTEGER, 0) as count, '
-					|| '		(SELECT '''||idxlist||''' @> (format(''"%s"'',replace(propkey,''"'',''\"'')))::jsonb) as searchable, '
+					|| '		(SELECT '''||idxlist||''' @>  to_jsonb(propkey)) as searchable, '
 					|| '		(SELECT * from xyz_property_datatype('''||schema||''','''||spaceid||''',propkey,1000)) as datatype '
 					|| '			FROM( 	'
 					|| '				SELECT jsonb_object_keys(jsondata->''properties'') as propkey '
@@ -849,13 +1264,13 @@ $BODY$
 				|| '		true as searchable, '
 				|| '		(SELECT * from xyz_property_datatype('''||schema||''','''||spaceid||''',propkey,'||tablesamplecnt||')) as datatype '
 				|| '	   FROM( '
-				|| '		select idx_property as propkey from xyz_index_list_all_available('''||schema||''','''||spaceid||''') '
-				|| '			WHERE src IN (''a'',''m'') '
+				|| '		select distinct split_part(idx_property,'','',1) as propkey from xyz_index_list_all_available('''||schema||''','''||spaceid||''') '
+				|| '			WHERE src IN (''a'',''m'', ''o'') '
 				|| '	   ) B group by propkey '
 				|| '	UNION '
 				|| '	SELECT  propkey, '
 				|| '		TRUNC(((COUNT(*)/1000::real) * '||estimate_cnt||')::numeric, 0)::INTEGER as count, '
-				|| '		(SELECT '''||idxlist||''' @> (format(''"%s"'',replace(propkey,''"'',''\"'')))::jsonb) as searchable, '
+				|| '		(SELECT '''||idxlist||''' @>  to_jsonb(propkey)) as searchable, '
 				|| '		(SELECT * from xyz_property_datatype('''||schema||''','''||spaceid||''',propkey,'||tablesamplecnt||')) as datatype '
 				|| '			FROM( '
 				|| '				SELECT jsonb_object_keys(jsondata->''properties'') as propkey '
@@ -869,8 +1284,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_statistic_newest_spaces_changes(text, text[], integer)
--- DROP FUNCTION xyz_statistic_newest_spaces_changes(text, text[], integer);
 CREATE OR REPLACE FUNCTION xyz_statistic_newest_spaces_changes(
     IN schema text,
     IN owner_list text[],
@@ -911,26 +1324,48 @@ $BODY$
 		FROM pg_class C
 			LEFT JOIN pg_tables D ON (D.tablename = C.relname)
 			LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
-			LEFT JOIN xyz_config.xyz_idxs_status E ON (E.spaceid = C.relname)
+            LEFT JOIN xyz_config.xyz_idxs_status E ON (E.spaceid = xyz_get_root_table(C.relname))
 		WHERE relkind='r' AND nspname = ''||schema||'' AND array_position(owner_list, tableowner::text) > 0
 			/** More than 3000 objecs has changed OR space is new and has more than min_table_count entries */
 			AND ((ABS(COALESCE(E.count,0) - COALESCE(reltuples,0)) > 3000 AND reltuples > min_table_count )  OR ( E.count IS null AND reltuples > min_table_count ))
 			AND relname != 'spatial_ref_sys'
-			ORDER BY reltuples
+        ORDER BY reltuples
 	LOOP
-		spaceid := xyz_spaces.spaceid;
+		BEGIN
+			spaceid := xyz_get_root_table(xyz_spaces.spaceid);
 
-		EXECUTE format('SELECT tablesize, geometrytypes, properties, tags, count, bbox from xyz_statistic_space(''%s'',''%s'')',schema , xyz_spaces.spaceid)
-			INTO tablesize, geometrytypes, properties, tags, count, bbox;
-		RETURN NEXT;
+			--Skip history-, head-, system-tables
+            IF NOT xyz_is_space_table(schema, spaceid) THEN
+                CONTINUE;
+            END IF;
+
+			EXECUTE format('SELECT tablesize, geometrytypes, properties, tags, count, bbox from xyz_statistic_space(''%s'',''%s'', false)',schema , xyz_spaces.spaceid)
+				INTO tablesize, geometrytypes, properties, tags, count, bbox;
+			RETURN NEXT;
+			EXCEPTION WHEN OTHERS THEN
+				RAISE NOTICE 'ERROR CREATING STATISTIC ON SPACE %',  xyz_spaces.spaceid;
+		END;
 	END LOOP;
 	END;
 $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_write_newest_idx_analyses(text)
--- DROP FUNCTION xyz_write_newest_idx_analyses(text);
+CREATE OR REPLACE FUNCTION xyz_is_space_table(schema TEXT, tableName TEXT) RETURNS BOOLEAN AS
+$BODY$
+BEGIN
+    -- TODO: Improve this function to not rely on the table's name anymore
+    IF length(tableName) < 6 THEN
+        RETURN TRUE;
+    END IF;
+    RETURN tableName != 'spatial_ref_sys' AND -- It's the spatial reference system table fro postGIS (system table)
+           substring(tableName, length(tableName) - 4) != '_head' AND -- It's a HEAD partition
+           tableName  !~ '.+\_p[0-9]'; -- It's a history partition
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_write_newest_idx_analyses(schema text)
   RETURNS void AS
 $BODY$
@@ -954,17 +1389,18 @@ $BODY$
 				WHERE idx_creation_finished = false
 					AND count > 0 --to avoid processing of spaces which are not already present (manual IDX)
 					AND count < 5000000 --temp
+					AND (auto_indexing IS NULL OR auto_indexing = true)
 		LOOP
 			BEGIN
 				IF xyz_space_stat.prop_stat != '[]'::jsonb THEN
 					select jsonb_agg(FORMAT('{"property":"%s","type":"%s"}',prop_key, prop_type)::jsonb) INTO idx_prop from (
-						select * from xyz_index_proposals_on_properties(schema,xyz_space_stat.spaceid)
+						select * from xyz_index_proposals_on_properties(schema,xyz_get_head_table(schema,xyz_space_stat.spaceid))
 							order by prop_key
 					)B;
 				END IF;
 
 				select jsonb_agg(FORMAT('{"property":"%s","src":"%s"}',idx_property, src)::jsonb) INTO idx_av from (
-					select * from xyz_index_list_all_available(schema,xyz_space_stat.spaceid)
+					select * from xyz_index_list_all_available(schema,xyz_get_head_table(schema,xyz_space_stat.spaceid))
 						--where src='a'
 						order by idx_property
 				)A;
@@ -981,8 +1417,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_write_newest_statistics(text, text[], integer)
--- DROP FUNCTION xyz_write_newest_statistics(text, text[], integer);
 CREATE OR REPLACE FUNCTION xyz_write_newest_statistics(
     schema text,
     owner_list text[],
@@ -1018,31 +1452,11 @@ $BODY$
 			  count bigint,
 			  prop_stat jsonb,
 			  idx_manual jsonb,
+              auto_indexing boolean,
 			  CONSTRAINT xyz_idxs_status_pkey PRIMARY KEY (spaceid)
 			);
 			INSERT INTO xyz_config.xyz_idxs_status (spaceid,count) VALUES ('idx_in_progress','0');
 		END IF;
-
-		FOR xyz_spaces IN
-			SELECT spaceid
-				FROM xyz_config.xyz_idxs_status C
-					LEFT JOIN pg_class A ON (A.relname = C.spaceid)
-					LEFT JOIN pg_tables D ON (D.tablename = C.spaceid)
-				WHERE (
-						D.tablename is null
-						AND C.spaceid != 'idx_in_progress'
-						AND C.count IS NOT NULL
-					)
-				    OR (
-						(COALESCE(reltuples,0) < min_table_count OR C.count IS NULL)
-						AND (idx_manual IS NULL OR idx_manual = '{}')
-						AND C.spaceid != 'idx_in_progress'
-				    )
-		LOOP
-			RAISE NOTICE 'Remove deleted space %',xyz_spaces.spaceid;
-			DELETE FROM xyz_config.xyz_idxs_status
-				WHERE spaceid = xyz_spaces.spaceid;
-		END LOOP;
 
 		xyz_spaces := NULL;
 
@@ -1074,8 +1488,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_statistic_all_spaces(text, text[], integer)
--- DROP FUNCTION xyz_statistic_all_spaces(text, text[], integer);
 CREATE OR REPLACE FUNCTION xyz_statistic_all_spaces(
     IN schema text,
     IN owner_list text[],
@@ -1121,7 +1533,7 @@ $BODY$
 		IF min_table_count > 0 AND min_table_count > xyz_spaces.cnt THEN
 			RETURN;
 		ELSE
-			EXECUTE format('SELECT tablesize, geometrytypes, properties, tags, count, bbox from xyz_statistic_space(''%s'',''%s'')',schema , xyz_spaces.spaceid)
+			EXECUTE format('SELECT tablesize, geometrytypes, properties, tags, count, bbox from xyz_statistic_space(''%s'',''%s'', false)',schema , xyz_spaces.spaceid)
 				INTO tablesize, geometrytypes, properties, tags, count, bbox;
 			RETURN NEXT;
 		END IF;
@@ -1131,8 +1543,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_property_evaluation(text, text, text, integer)
--- DROP FUNCTION xyz_property_evaluation(text, text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_property_evaluation(
     IN schema text,
     IN spaceid text,
@@ -1208,8 +1618,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_proposals_on_properties(text, text)
--- DROP FUNCTION xyz_index_proposals_on_properties(text, text);
 CREATE OR REPLACE FUNCTION xyz_index_proposals_on_properties(
     IN schema text,
     IN _spaceid text)
@@ -1266,7 +1674,7 @@ $BODY$
 			/** Ignore manual deactivated idx */
 			SELECT * from(
 				SELECT *,
-					(SELECT idx_manual->key from xyz_config.xyz_idxs_status WHERE spaceid = _spaceid) as manual
+					(SELECT (case when idx_manual ? 'searchableProperties' then nullif( idx_manual->'searchableProperties', 'null' ) else idx_manual end)->key from xyz_config.xyz_idxs_status WHERE spaceid = _spaceid) as manual
 					from (
 						SELECT * from xyz_property_statistic(schema, _spaceid, auto_tablescan)
 				) A
@@ -1364,8 +1772,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_creation_on_property(text, text, text, character
--- DROP FUNCTION xyz_index_creation_on_property(text, text, text, character);
 CREATE OR REPLACE FUNCTION xyz_index_creation_on_property(
     schema text,
     spaceid text,
@@ -1403,7 +1809,7 @@ $BODY$
 		SELECT * into idx_name
 			FROM xyz_index_name_for_property(spaceid, propkey, source);
 
-		/** TODO: CREATE INDEX CONCURRENTLY - make use of dblink "%s" ' */
+		/** TODO: CREATE INDEX CONCURRENTLY - Use asyncify()! */
 		EXECUTE format('CREATE INDEX "%s" '
 				||'ON %s."%s" '
 				||'((jsondata->''properties''->''%s''))',
@@ -1419,8 +1825,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_geotype(geometry)
--- DROP FUNCTION xyz_geotype(geometry);
 CREATE OR REPLACE FUNCTION xyz_geotype(geo geometry)
   RETURNS text AS
 $BODY$
@@ -1453,8 +1857,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_name_for_property(text, text, character)
--- DROP FUNCTION xyz_index_name_for_property(text, text, character);
 CREATE OR REPLACE FUNCTION xyz_index_name_for_property(
     spaceid text,
     propkey text,
@@ -1498,68 +1900,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_list_all_available(text, text)
--- DROP FUNCTION xyz_index_list_all_available(text, text);
-CREATE OR REPLACE FUNCTION xyz_index_list_all_available(
-    IN schema text,
-    IN spaceid text)
-  RETURNS TABLE(idx_name text, idx_property text, src character) AS
-$BODY$
-	/**
-	* Description: This function return all properties which are indexed.
-	*
-	* Parameters:
-	*   @schema			- schema in which the XYZ-spaces are located
-	*   @spaceid		- id of XYZ-space (tablename)
-	*
-	* Returns (table):
-	*	idx_name		- Index-name
-	*	idx_property	- Property name on which the Index is based on
-	*	src				- source (a - automatic ; m - manual; s - system/unknown)
-	*/
-
-	DECLARE
-		/** blacklist of XYZ-System indexes */
-		ignore_idx text := 'NOT IN(''id'',''tags'',''geo'',''serial'')';
-		av_idx_list record;
-		comment_prefix text:='p.name=';
-	BEGIN
-		FOR av_idx_list IN
-			   SELECT indexname, substring(indexname from char_length(spaceid) + 6) as idx_on, COALESCE((SELECT source from xyz_index_name_dissolve_to_property(indexname,spaceid)),'s') as source
-				FROM pg_indexes
-					WHERE
-				schemaname = ''||schema||'' AND tablename = ''||spaceid||''
-		LOOP
-			src := av_idx_list.source;
-			idx_name := av_idx_list.indexname;
-
-			BEGIN
-				/** Check if comment with the property-name is present */
-				select * into idx_property
-					from obj_description( (concat('"',av_idx_list.indexname,'"')::regclass ));
-
-				EXCEPTION WHEN OTHERS THEN
-					/** do nothing - This Index is not a property index! */
-			END;
-
-			IF idx_property IS NOT null THEN
-				IF (position(''||comment_prefix||'' in ''||idx_property||'')) != 0 THEN
-					/** we found the name of the property in the comment */
-					idx_property := substring(idx_property, char_length(''||comment_prefix||'')+1);
-				END IF;
-			ELSE
-				idx_property := av_idx_list.idx_on;
-			END IF;
-
-			RETURN NEXT;
-		END LOOP;
-	END
-$BODY$
-  LANGUAGE plpgsql VOLATILE;
-------------------------------------------------
-------------------------------------------------
--- Function: xyz_index_find_missing_system_indexes(text, text[])
--- DROP FUNCTION xyz_index_find_missing_system_indexes(text, text[]);
 CREATE OR REPLACE FUNCTION xyz_index_find_missing_system_indexes(
     IN schema text,
     IN owner_list text[])
@@ -1602,8 +1942,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_name_dissolve_to_property(text,text)
--- DROP FUNCTION xyz_index_name_dissolve_to_property(text,text);
 CREATE OR REPLACE FUNCTION xyz_index_name_dissolve_to_property(IN idx_name text, space_id text)
   RETURNS TABLE(spaceid text, propkey text, source character) AS
 $BODY$
@@ -1632,8 +1970,8 @@ $BODY$
 		SELECT * INTO idx_split FROM regexp_split_to_array(substring(idx_name from char_length(space_id) + 6), '_');
 
 		spaceid := space_id;
-		propkey := idx_split[1];
-		source := idx_split[2];
+		propkey := xyz_index_get_plain_propkey(idx_split[1]);
+		source :=  regexp_replace(idx_split[2],'o1[01]*$','o');
 
 		RETURN NEXT;
 	END;
@@ -1641,8 +1979,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_index_property_available(text, text, text)
--- DROP FUNCTION xyz_index_property_available(text, text, text);
 CREATE OR REPLACE FUNCTION xyz_index_property_available(
     schema text,
     spaceid text,
@@ -1683,8 +2019,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_property_statistic(text, text, integer)
--- DROP FUNCTION xyz_property_statistic(text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_property_statistic(
     IN schema text,
     IN spaceid text,
@@ -1748,8 +2082,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_tag_statistic(text, text, integer)
--- DROP FUNCTION xyz_tag_statistic(text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_tag_statistic(
     IN schema text,
     IN spaceid text,
@@ -1801,8 +2133,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_statistic_searchable(jsonb)
--- DROP FUNCTION xyz_statistic_searchable(jsonb);
 CREATE OR REPLACE FUNCTION xyz_statistic_searchable(prop_stat jsonb)
   RETURNS text AS
 $BODY$
@@ -1843,8 +2173,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_statistic_xl_space(text, text, integer)
--- DROP FUNCTION xyz_statistic_xl_space(text, text, integer);
 CREATE OR REPLACE FUNCTION xyz_statistic_xl_space(
     IN schema text,
     IN spaceid text,
@@ -1918,9 +2246,8 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_statistic_space(text, text)
--- DROP FUNCTION xyz_statistic_space(text, text);
-CREATE OR REPLACE FUNCTION xyz_statistic_space(
+
+CREATE OR REPLACE FUNCTION xyz_statistic_space_v1(
     IN schema text,
     IN spaceid text)
   RETURNS TABLE(tablesize jsonb, geometrytypes jsonb, properties jsonb, tags jsonb, count jsonb, bbox jsonb, searchable text) AS
@@ -1952,20 +2279,81 @@ $BODY$
 	DECLARE estimate_cnt bigint;
 
 	BEGIN
-		SELECT reltuples into estimate_cnt FROM pg_class WHERE oid = concat('"',$1, '"."', $2, '"')::regclass;
+		SELECT reltuples into estimate_cnt FROM pg_class WHERE oid = ( select concat('"',$1, '"."', xyz_get_head_table(schema, spaceid), '"')::regclass);
 
 		IF estimate_cnt > big_space_threshold THEN
-			RETURN QUERY EXECUTE 'select * from xyz_statistic_xl_space('''||schema||''', '''||spaceid||''' , '||tablesamplecnt||')';
+			RETURN QUERY EXECUTE 'select * from xyz_statistic_xl_space('''||schema||''', ''' || xyz_get_head_table(schema, spaceid) || ''' , '||tablesamplecnt||')';
 		ELSE
-			RETURN QUERY EXECUTE 'select * from xyz_statistic_xs_space('''||schema||''','''||spaceid||''')';
+			RETURN QUERY EXECUTE 'select * from xyz_statistic_xs_space('''||schema||''',''' || xyz_get_head_table(schema, spaceid) || ''')';
 		END IF;
         END;
 $BODY$
   LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION xyz_statistic_space_v2(
+    IN schema text,
+    IN spaceid text)
+  RETURNS TABLE(tablesize jsonb, geometrytypes jsonb, properties jsonb, tags jsonb, count jsonb, bbox jsonb, searchable text) AS
+$BODY$
+
+with indata as ( select xyz_statistic_space_v2.schema as s, xyz_statistic_space_v2.spaceid as t ),
+--with indata as ( select 'public' as s, 'exportTestdata03' as t ),
+--with indata as ( select 'public' as s, 'x-psql-test' as t ),
+iindata as
+( select row_number() over () as idx, r.* from
+	(	select i.s as schem, unnest( array_remove( array[i.t, m.meta#>>'{extends,intermediateTable}', m.meta#>>'{extends,extendedTable}'], null ) ) as tbl from xyz_config.space_meta m right join indata i on ( m.schem = i.s and m.h_id = regexp_replace( i.t, '_head$', '' ))  ) r
+),
+iiindata as ( select * from iindata i, lateral ( select * from xyz_statistic_space_v1(i.schem,i.tbl) ) l ),
+c1 as ( select jsonb_build_object( 'value', sum( (tablesize->'value')::bigint ), 'estimated', max( (tablesize->>'estimated') )::boolean) as tablesize from iiindata ),
+c2 as
+( select jsonb_build_object( 'value', coalesce( jsonb_agg( distinct e1 ),'[]'::jsonb ), 'estimated', coalesce( max( e2::text )::boolean, false ) ) as geometrytypes
+  from ( select jsonb_array_elements( geometrytypes->'value' ) as e1, geometrytypes->'estimated' as e2 from iiindata ) o
+),
+c3 as
+( select jsonb_build_object('value',coalesce( jsonb_agg( v ),'[]'::jsonb ),'estimated', coalesce( max( e::text )::boolean, false ) ) as properties
+  from
+  ( select jsonb_build_object('key',e1->>'key','count', sum( (e1->'count')::bigint ),'datatype', max( e1->>'datatype' )) || case when max( e1->>'searchable' ) isnull then '{}'::jsonb else jsonb_build_object( 'searchable', max( e1->>'searchable' )::boolean ) end as v, max( e2::text ) as e
+    from ( select jsonb_array_elements( properties->'value' ) as e1, properties->'estimated' as e2 from iiindata ) o
+    group by o.e1->>'key'
+  ) oo
+),
+c4 as
+( select jsonb_build_object( 'value', coalesce( jsonb_agg( distinct e1 ),'[]'::jsonb ), 'estimated', coalesce( max( e2::text )::boolean, true ) ) as tags
+  from ( select jsonb_array_elements( tags->'value' ) as e1, tags->'estimated' as e2 from iiindata ) oo
+),
+c5 as
+(	select jsonb_build_object( 'value', e1 , 'estimated', e2 ) as count
+  from
+  ( select  sum((count->>'value')::bigint)::bigint as e1, max( count->>'estimated' )::boolean as e2 from iiindata ) oo
+),
+c6 as
+( select jsonb_build_object( 'value', coalesce(e1,'') , 'estimated', coalesce(e2,false) ) as bbox
+  from ( select  st_extent( (bbox->>'value')::box2d::geometry )::text as e1, max( bbox->>'estimated' )::boolean as e2 from iiindata where strpos(bbox->>'value','BOX(') > 0 ) oo
+),
+c7 as ( select max( searchable ) as searchable from iiindata ),
+outdata as ( select * from c1,c2,c3,c4,c5,c6,c7 )
+select * from outdata
+--select * from iiindata
+$BODY$
+LANGUAGE sql VOLATILE;
+
+create or replace function xyz_statistic_space( schema text, spaceid text, ctx_extend boolean)
+  returns table(tablesize jsonb, geometrytypes jsonb, properties jsonb, tags jsonb, count jsonb, bbox jsonb, searchable text) AS
+$body$
+begin
+
+ if ctx_extend then
+  return query select * from xyz_statistic_space_v1( schema, spaceid );
+ else
+  return query select * from xyz_statistic_space_v2( schema, spaceid );
+ end if;
+
+end;
+$body$
+language plpgsql volatile;
+
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_statistic_xs_space(text, text)
--- DROP FUNCTION xyz_statistic_xs_space(text, text);
 CREATE OR REPLACE FUNCTION xyz_statistic_xs_space(
     IN schema text,
     IN spaceid text)
@@ -2015,7 +2403,7 @@ $BODY$
 			||'				select * FROM xyz_tag_statistic('''||schema||''','''||spaceid||''', null) '
 			||'			) as tag_stat '
 			||'		), '
-			||'		(SELECT count(*) FROM "'||schema||'"."'||spaceid||'") AS count, '
+			||'		(SELECT count(*) FROM "'||schema||'"."'||spaceid||'" where operation not in (''H'',''J'',''D'') ) AS count, '
 			||'		(SELECT xyz_space_bbox('''||schema||''','''||spaceid||''', null)) AS bbox '
 			||'			FROM pg_class '
 			||'		WHERE oid='''||schema||'."'||spaceid||'"''::regclass) A';
@@ -2024,8 +2412,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_create_idxs_for_space(text, text)
--- DROP FUNCTION xyz_create_idxs_for_space(text, text);
 CREATE OR REPLACE FUNCTION xyz_create_idxs_for_space(
     schema text,
     space text)
@@ -2086,8 +2472,6 @@ $BODY$
   LANGUAGE plpgsql VOLATILE;
 ------------------------------------------------
 ------------------------------------------------
--- Function: xyz_remove_unnecessary_idx(text, integer)
--- DROP FUNCTION xyz_remove_unnecessary_idx(text, integer);
 CREATE OR REPLACE FUNCTION xyz_remove_unnecessary_idx(
     schema text,
     min_table_count integer)
@@ -2150,25 +2534,93 @@ $body$
 language plpgsql immutable;
 ------------------------------------------------
 ------------------------------------------------
+CREATE OR REPLACE FUNCTION _prj_flatten(jdoc jsonb, depth integer )
+RETURNS TABLE(level integer, jkey text, jval jsonb) AS
+$body$
+with
+ indata1  as ( select jdoc as jdata ),
+ indata2  as ( select coalesce( depth, 100 )::integer as depth ), -- if unset, restrict leveldepth to 100, safetyreason
+ outdata as
+ ( with recursive searchobj( level, jkey, jval ) as
+  (
+    select 0::integer as level, key as jkey, value as jval
+    from jsonb_each( jsonb_set('{}','{s}', (select jdata from indata1) ))
+   union all
+    select i.level + 1 as level, i.jkey || coalesce( '.' || key, '[' || ((row_number() over ( partition by i.jkey ) ) - 1)::text || ']' ), i.value as jval
+    from
+    (  select level, jkey, (_prj_jsonb_each( jval )).*
+       from searchobj, indata2 i2
+       where 1 = 1
+       and jsonb_typeof( jval ) in ( 'object', 'array' )
+       and level < i2.depth
+    ) i
+  )
+  select level, nullif( regexp_replace(jkey,'^s\.?','' ),'') as jkey, jval from searchobj, indata2 i2
+  where 1 = 1
+    and
+    ( ( level = i2.depth ) or ( jsonb_typeof( jval ) in ( 'string', 'number', 'boolean', 'null' ) and level < i2.depth ) )
+ )
+ select level, jkey, jval from outdata
+$body$
+LANGUAGE sql IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION prj_flatten(jdoc jsonb)
 RETURNS TABLE(level integer, jkey text, jval jsonb) AS
 $body$
-with recursive searchobj( level, jkey, jval ) as
-(
-  select 0::integer as level, key as jkey, value as jval from jsonb_each( jdoc )
- union all
-  select i.level + 1 as level, i.jkey || '.' || coalesce(key, ((row_number() over ( partition by i.jkey ) ) - 1)::text ), i.value as jval
-  from
-  (  select level, jkey, (_prj_jsonb_each( jval )).*
-     from searchobj
-     where 1 = 1
-      and jsonb_typeof( jval ) in ( 'object', 'array' )
-      and level < 100
-   ) i
-)
-select level, jkey, jval from searchobj
-where 1 = 1
-  and jsonb_typeof( jval ) in ( 'string', 'number', 'boolean', 'null' )
+ select * from _prj_flatten( jdoc, 100 )
+$body$
+LANGUAGE sql IMMUTABLE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION _prj_diff( left_jdoc jsonb, right_jdoc jsonb )
+RETURNS TABLE(level integer, jkey text, jval_l jsonb, jval_r jsonb ) AS
+$body$
+with
+ inleft  as ( select level, jkey, jval from _prj_flatten( left_jdoc , 1 ) ),
+ inright as ( select level, jkey, jval from _prj_flatten( right_jdoc, 1 ) ),
+ outdiff as
+ ( with recursive diffobj( level, jkey, jval_l, jval_r ) as
+   (
+     select coalesce( r.level, l.level ) as level, coalesce( l.jkey, r.jkey ) as jkey, l.jval as jval_l, r.jval as jval_r
+     from inleft l full outer join inright r on ( r.jkey = l.jkey  )
+     where (l.jkey isnull) or (r.jkey isnull) or ( l.jval != r.jval )
+	union all
+	 select ( i.level + nxt.level ) as level ,
+		    case nxt.jkey ~ '^\[\d+\]$'
+	         when false then  i.jkey || '.' || nxt.jkey
+			 else i.jkey || nxt.jkey
+		    end as jkey,  /*i.jval_l, i.jval_r,*/
+		   nxt.jval_l, nxt.jval_r
+	 from diffobj i,
+		  lateral
+		  ( select coalesce( r.level, l.level ) as level, coalesce( l.jkey, r.jkey ) as jkey, l.jval as jval_l, r.jval as jval_r
+		    from _prj_flatten( i.jval_l,1) l full outer join _prj_flatten(i.jval_r,1) r on ( r.jkey = l.jkey  )
+		    where (l.jkey isnull) or (r.jkey isnull) or ( l.jval != r.jval )
+		  ) nxt
+	 where 1 = 1
+	   and jsonb_typeof( i.jval_l ) in ( 'object', 'array' )
+	   and jsonb_typeof( i.jval_l ) = jsonb_typeof( i.jval_r )
+   )
+   select * from diffobj
+   where 1 = 1
+     and ( 	  (jval_l isnull)
+		   or (jval_r isnull)
+		   or jsonb_typeof( jval_l ) in ( 'string', 'number', 'boolean', 'null' )
+		   or jsonb_typeof( jval_r ) in ( 'string', 'number', 'boolean', 'null' )
+		   or (    jsonb_typeof( jval_l ) != jsonb_typeof( jval_r )
+			   and jsonb_typeof( jval_l ) in ( 'object', 'array' )
+			   and jsonb_typeof( jval_r ) in ( 'object', 'array' )
+			  )
+		 )
+ )
+select * from outdiff order by jkey
+$body$
+LANGUAGE sql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION prj_diff( left_jdoc jsonb, right_jdoc jsonb )
+RETURNS jsonb AS
+$body$
+ select jsonb_agg( jsonb_build_array( jkey, jval_l, jval_r ) ) from _prj_diff( left_jdoc, right_jdoc ) d
 $body$
 LANGUAGE sql IMMUTABLE;
 ------------------------------------------------
@@ -2177,8 +2629,8 @@ CREATE OR REPLACE FUNCTION prj_input_validate(plist text[])
 RETURNS text[] AS
 $body$
 select array_agg( i.jpth ) from
-( with t1 as ( select unnest( plist ) jpth )
-  select l.jpth from t1 l join t1 r on ( strpos( l.jpth, r.jpth ) = 1 )
+( with t1 as ( select distinct unnest( plist ) jpth )
+  select l.jpth from t1 l join t1 r on ( l.jpth = r.jpth or strpos( l.jpth, r.jpth || '.' ) = 1 )
   group by 1 having count(1) = 1
 ) i
 $body$
@@ -2329,32 +2781,11 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 ------------------------------------------------
 ------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_qk_lrc2bbox(rowY integer, colX integer, level integer)
-	RETURNS geometry AS $$
-DECLARE
- numRowsCols constant integer := 1 << level;
- tileSize    constant numeric := 2.0 * pi() / numRowsCols;
-
- RAD_TO_WGS84 constant numeric := 180. / pi();
-
- maxX numeric;
- maxY numeric;
- minX numeric;
- minY numeric;
-
-BEGIN
-
-  maxX = ((-pi()) + tileSize * (colX + 1)) * RAD_TO_WGS84;
-  minX = ((-pi()) + tileSize * colX) * RAD_TO_WGS84;
-  maxY = pi() - tileSize * rowY;
-  minY = pi() - tileSize * (rowY + 1);
-
-  maxY = atan( (exp(maxY) - exp(-maxY)) / 2  ) * RAD_TO_WGS84;
-  minY = atan( (exp(minY) - exp(-minY)) / 2  ) * RAD_TO_WGS84;
-
-  return ST_MakeEnvelope( minX, minY, maxX, maxY, 4326 );
-
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+	RETURNS geometry AS
+$$
+ select st_transform(ST_TileEnvelope(level, colX, rowY), 4326)
+$$
+LANGUAGE sql IMMUTABLE;
 ------------------------------------------------
 ------------------------------------------------
 CREATE OR REPLACE FUNCTION xyz_qk_qk2bbox( qid text )
@@ -2389,3 +2820,1461 @@ $body$ -- select round( ( ln( 360 ) - ln( st_xmax(i.env) - st_xmin(i.env) )  )/ 
 $body$
 LANGUAGE sql IMMUTABLE;
 ------------------------------------------------
+------ftm - fast tile mode ------------------------------------------
+CREATE OR REPLACE FUNCTION ftm_SimplifyPreserveTopology( geo geometry, tolerance float)
+  RETURNS geometry AS
+$BODY$
+ select case ST_NPoints( geo ) < 20 when true then geo else st_simplifypreservetopology( geo, tolerance ) end
+$BODY$
+  LANGUAGE sql IMMUTABLE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION ftm_Simplify( geo geometry, tolerance float)
+  RETURNS geometry AS
+$BODY$
+ select case ST_NPoints( geo ) < 20 when true then geo else (select case st_issimple( i.g ) when true then i.g else null end from ( select st_simplify( geo, tolerance,false ) as g ) i ) end
+$BODY$
+  LANGUAGE sql IMMUTABLE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_postgis_selectivity( tbl regclass, att_name text, geom geometry )
+ returns double precision
+language 'plpgsql'
+cost 1
+volatile strict parallel safe
+as
+$body$
+declare
+begin
+ return _postgis_selectivity( tbl, att_name, geom );
+ exception when others then
+  return 0.0;
+end;
+$body$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION max_bigint() RETURNS BIGINT AS
+$BODY$
+BEGIN
+    RETURN 9223372036854775807::BIGINT;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION operation_2_human_readable(operation CHAR) RETURNS TEXT AS
+$BODY$
+BEGIN
+    RETURN CASE WHEN operation = 'I' OR operation = 'H' THEN 'insert' ELSE (CASE WHEN operation = 'U' OR operation = 'J' THEN 'update' ELSE 'delete' END) END;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_isHideOperation(operation CHAR) RETURNS BOOLEAN AS
+$BODY$
+BEGIN
+    RETURN operation = 'H' OR operation = 'J';
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_write_versioned_modification_operation(id TEXT, version BIGINT, operation CHAR, jsondata JSONB, geo GEOMETRY, schema TEXT, tableName TEXT, concurrencyCheck BOOLEAN, partitionSize BIGINT, versionsToKeep INT, pw TEXT, baseVersion BIGINT)
+    RETURNS INTEGER AS
+$BODY$
+    DECLARE
+        author TEXT := (jsondata->'properties'->'@ns:com:here:xyz'->>'author')::TEXT;
+        updated_rows INTEGER;
+        minVersion BIGINT;
+    BEGIN
+        -- First update the affected old version of the feature to make its next_version pointing to the new version
+        IF operation != 'I' AND operation != 'H' THEN
+            IF concurrencyCheck THEN
+                IF baseVersion IS NULL THEN
+                    RAISE EXCEPTION 'Error while trying to % feature with ID % in version %.', operation_2_human_readable(operation), id, version
+                        USING HINT = 'Base version is missing. Concurrency check can not be performed.';
+                END IF;
+
+                EXECUTE
+                    format('UPDATE %I.%I SET next_version = %L WHERE id = %L AND next_version = %L AND version = %L',
+                           schema, tableName, version, id, max_bigint(), baseVersion);
+
+                GET DIAGNOSTICS updated_rows = ROW_COUNT;
+                IF updated_rows != 1 THEN
+                    RAISE EXCEPTION 'Conflict while trying to % feature with ID % in version %.', operation_2_human_readable(operation), id, version
+                        USING HINT = 'Base version ' || baseVersion::TEXT || ' is not matching the current HEAD version.',
+                            ERRCODE = 'XYZ49';
+                END IF;
+            ELSE
+                EXECUTE
+                    format('UPDATE %I.%I SET next_version = %L WHERE id = %L AND next_version = %L AND version < %L',
+                           schema, tableName, version, id, max_bigint(), version);
+
+                GET DIAGNOSTICS updated_rows = ROW_COUNT;
+                IF updated_rows != 1 THEN
+                    -- This can only happen if the HEAD version of the feature was deleted in the table for some reason
+                    RAISE EXCEPTION 'Unexpected error while trying to % feature with ID % in version %.', operation_2_human_readable(operation), id, version
+                        USING HINT = 'Previous (HEAD) version of the feature is missing.',
+                            ERRCODE = 'XYZ50';
+                END IF;
+            END IF;
+        ELSE
+            -- Ignore concurrency check for inserts and try to update the previous versions
+            --TODO: Activate concurrency check for inserts as well
+            EXECUTE
+                format('UPDATE %I.%I SET next_version = %L WHERE id = %L AND next_version = %L AND version < %L',
+                       schema, tableName, version, id, max_bigint(), version);
+        END IF;
+
+        -- Now actually insert the new version of the feature (NOTE: The order is important here to not violate the (id, next_version) uniqueness constraint)
+        EXECUTE
+            format('INSERT INTO %I.%I (id, version, operation, author, jsondata, geo) VALUES (%L, %L, %L, %L, %L, %L)',
+                   schema, tableName, id, version, operation, author, jsondata, xyz_geoFromWkb(geo) );
+
+
+        -- If the current history partition is nearly full, create the next one already
+        IF version % partitionSize > partitionSize - 50 THEN
+            EXECUTE xyz_create_history_partition(schema, tableName, (floor(version / partitionSize) + 1)::BIGINT, partitionSize);
+        END IF;
+
+        -- Delete old changesets from the history to keep only as many versions as specified through "versionsToKeep" if necessary
+        -- Temporarily deactivated
+        --IF version % 10 = 1 THEN -- Perform the check only on every 10th transaction
+        --    minVersion := version - versionsToKeep + 1;
+        --    IF minVersion > 0 THEN
+        --        PERFORM asyncify('SELECT xyz_delete_changesets(''' || schema || ''', ''' || tableName || ''', ' ||  partitionSize || ', ' || minVersion || ')', pw);
+        --    END IF;
+        --END IF;
+
+        RETURN 1;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_simple_upsert(id TEXT, version BIGINT, operation CHAR, author TEXT, jsondata JSONB, geo GEOMETRY, schema TEXT, tableName TEXT, concurrencyCheck BOOLEAN, uniqueConstraintExists BOOLEAN)
+    RETURNS INTEGER AS
+$BODY$
+    DECLARE
+        insertQuery TEXT;
+        updated_rows INTEGER;
+    BEGIN
+        insertQuery = 'INSERT INTO %I.%I AS tbl (id, version, operation, author, jsondata, geo) VALUES (%L, %L, %L, %L, %L, %L)';
+        IF concurrencyCheck THEN
+            -- This query will throw an error in case of a conflict
+            EXECUTE
+                format(insertQuery,
+                       schema, tableName, id, version, operation, author, jsondata, xyz_geoFromWkb(geo));
+        ELSE
+            IF uniqueConstraintExists THEN
+                -- This query will perform an update instead of throwing an error in case of a conflict
+                insertQuery = insertQuery || ' ON CONFLICT (id, next_version) DO UPDATE SET ' ||
+                              'version = greatest(tbl.version, EXCLUDED.version), ' ||
+                              'operation = CASE WHEN xyz_isHideOperation(EXCLUDED.operation) THEN ''J'' ELSE ''U'' END, ' ||
+                              'author = EXCLUDED.author, ' ||
+                              'jsondata = EXCLUDED.jsondata, ' ||
+                              'geo = EXCLUDED.geo';
+            END IF;
+
+            EXECUTE
+                format(insertQuery,
+                       schema, tableName, id, version, operation, author, jsondata, xyz_geoFromWkb(geo));
+        END IF;
+
+        GET DIAGNOSTICS updated_rows = ROW_COUNT;
+        RETURN updated_rows;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_simple_update(id TEXT, version BIGINT, operation CHAR, author TEXT, jsondata JSONB, geo GEOMETRY, schema TEXT, tableName TEXT, concurrencyCheck BOOLEAN, baseVersion BIGINT)
+    RETURNS INTEGER AS
+$BODY$
+BEGIN
+    RETURN xyz_simple_update(id, version, operation, author,
+                             jsondata, geo, schema, tableName,
+                             concurrencyCheck, baseVersion, true);
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_simple_update(id TEXT, version BIGINT, operation CHAR, author TEXT, jsondata JSONB, geo GEOMETRY, schema TEXT, tableName TEXT, concurrencyCheck BOOLEAN, baseVersion BIGINT, raiseErrors BOOLEAN)
+    RETURNS INTEGER AS
+$BODY$
+    DECLARE
+        updated_rows INTEGER;
+    BEGIN
+        EXECUTE
+            format('UPDATE %I.%I SET version = %L, operation = %L, author = %L, jsondata = %L, geo = %L WHERE id = %L'
+                       || xyz_simple_conflictCheck(concurrencyCheck, baseVersion),
+                schema, tableName, version, operation, author, jsondata, xyz_geoFromWkb(geo), id);
+
+        GET DIAGNOSTICS updated_rows = ROW_COUNT;
+
+        IF raiseErrors THEN
+            IF concurrencyCheck THEN
+                IF updated_rows != 1 THEN
+                    RAISE EXCEPTION 'Conflict while trying to % feature with ID % in version %.', operation_2_human_readable(operation), id, version
+                        USING HINT = 'Base version ' || CASE WHEN baseVersion IS NULL THEN '' ELSE baseVersion::TEXT END || ' is not matching the current HEAD version.',
+                            ERRCODE = 'XYZ49';
+                END IF;
+            ELSE
+                IF updated_rows != 1 THEN
+                    -- This can only happen if the feature was deleted in the meantime
+                    RAISE EXCEPTION 'Conflict while trying to % feature with ID % in version %.', operation_2_human_readable(operation), id, version
+                        USING HINT = 'Feature was deleted in the meantime.',
+                            ERRCODE = 'XYZ49';
+                END IF;
+            END IF;
+        END IF;
+
+        RETURN updated_rows;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_simple_delete(id TEXT, schema TEXT, tableName TEXT, concurrencyCheck BOOLEAN, baseVersion BIGINT)
+    RETURNS INTEGER AS
+$BODY$
+    DECLARE
+        updated_rows INTEGER;
+    BEGIN
+        EXECUTE
+            format('DELETE FROM %I.%I WHERE id = %L'
+                       || xyz_simple_conflictCheck(concurrencyCheck, baseVersion),
+                   schema, tableName, id);
+
+        GET DIAGNOSTICS updated_rows = ROW_COUNT;
+
+        IF concurrencyCheck AND updated_rows != 1 THEN
+            RAISE EXCEPTION 'Conflict while trying to % feature with ID %.', operation_2_human_readable('D'), id
+                USING HINT = 'Base version ' || CASE WHEN baseVersion IS NULL THEN '' ELSE baseVersion::TEXT END || ' is not matching the current HEAD version.',
+                    ERRCODE = 'XYZ49';
+        END IF;
+
+        RETURN updated_rows;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_simple_conflictCheck(concurrencyCheck BOOLEAN, baseVersion BIGINT)
+    RETURNS TEXT AS
+$BODY$
+    BEGIN
+        RETURN CASE WHEN NOT concurrencyCheck
+            THEN
+                ''
+            ELSE
+                CASE WHEN baseVersion IS NULL
+                    THEN
+                        format(' AND next_version = %L', max_bigint())
+                    ELSE
+                        format(' AND version = %L', baseVersion)
+                    END
+            END;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_geoFromWkb(geo GEOMETRY)
+    RETURNS GEOMETRY AS
+$BODY$
+    BEGIN
+        RETURN CASE WHEN geo::geometry IS NULL THEN NULL ELSE xyz_reduce_precision( ST_Force3D(ST_GeomFromWKB(geo::BYTEA, 4326)) ) END;
+    END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'load_feature_version_input') THEN
+    CREATE TYPE load_feature_version_input AS (
+        id          TEXT,
+        version     BIGINT
+    );
+    END IF;
+    --more types here...
+END$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_create_history_partition(schema TEXT, rootTable TEXT, partitionNo BIGINT, partitionSize BIGINT)
+    RETURNS VOID AS
+$BODY$
+BEGIN
+    RAISE NOTICE 'Creating new history partition for %.% with partition no % ...',
+        schema, rootTable, partitionNo;
+    EXECUTE
+        format('CREATE TABLE IF NOT EXISTS %I.%I PARTITION OF %I.%I FOR VALUES FROM (%L) TO (%L)',
+            schema, (rootTable || '_p' || partitionNo), schema, rootTable,
+            partitionSize * partitionNo, partitionSize * (partitionNo + 1));
+    RAISE NOTICE 'Partition no % was successfully created (or existed already) for %.%.',
+        partitionNo, schema, rootTable;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_delete_changesets(schema TEXT, tableName TEXT, partitionSize BIGINT, minVersion BIGINT) RETURNS VOID AS
+$BODY$
+DECLARE
+    minRangeMin BIGINT;
+BEGIN
+    -- Get range-min value of the oldest history partition
+    minRangeMin := (WITH partition_ranges as (
+        SELECT substring(pg_get_expr(relpartbound, oid, true), 19) as range_expression
+            FROM pg_class WHERE relname LIKE tableName || '_p%' AND relkind = 'r'
+    ) SELECT min(substring(range_expression, 0, position('''' IN range_expression))::BIGINT) FROM partition_ranges);
+
+    -- Drop according partitions
+    FOR partitionNo IN (minRangeMin / partitionSize)..((minVersion + 1) / partitionSize - 1) LOOP
+        EXECUTE 'DROP TABLE IF EXISTS "' || schema || '"."' || tableName || '_p' || partitionNo || '"';
+    END LOOP;
+
+    -- Purge the remainder in the new oldest partition
+    EXECUTE 'DELETE FROM "' || schema || '"."' || tableName || '" WHERE next_version <= ' || minVersion;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_advanced_delete_changesets(
+	schema text,
+	tablename text,
+	partitionsize bigint,
+	versions_to_keep bigint,
+	min_tag_version bigint,
+	pw text)
+RETURNS void AS
+$BODY$
+DECLARE
+    statistic RECORD;
+	calculated_min_version BIGINT;
+BEGIN
+    execute format('select '
+                   || 'meta->''minAvailableVersion'' as min_available_version, '
+                   || '(meta->''userMinVersion'')::BIGINT as user_min_version, '
+                   || '(select max(version) from "%1$s"."%2$s") as max_version, '
+                   || '%3$L::bigint as versions_to_keep '
+                   || 'from xyz_config.space_meta '
+                   || 'where '
+                   || 'h_id=%2$L', schema, tablename, versions_to_keep )
+    INTO statistic;
+
+    IF statistic IS NULL THEN
+		-- Table not found in space_meta table - abort!
+		RETURN;
+    END IF;
+
+	calculated_min_version := COALESCE(greatest(statistic.user_min_version, statistic.max_version - statistic.versions_to_keep + 1),0);
+
+	IF min_tag_version >= 0 THEN
+		-- Tag has priority. Delete nothing below the minTagVersion!
+		calculated_min_version := least(min_tag_version , calculated_min_version);
+    END IF;
+
+	RAISE NOTICE 'PURGE - max_version:% min_available_version:% user_min_version:% calculated_min_version:%',
+		statistic.max_version, statistic.min_available_version, statistic.user_min_version, calculated_min_version;
+
+	IF calculated_min_version < 0 THEN
+		RAISE NOTICE 'calculated_min_version is negative - ignore!';
+		RETURN;
+    END IF;
+
+	IF statistic.min_available_version::BIGINT >= calculated_min_version THEN
+		RAISE NOTICE 'PURGE - Requested versions are already deleted!';
+		RETURN;
+    END IF;
+
+	PERFORM asyncify('SELECT xyz_delete_changesets(''' || schema || ''', ''' || tableName || ''', ' ||  partitionSize || ', ' || calculated_min_version || ')', pw);
+
+    update xyz_config.space_meta
+        set meta = meta || jsonb_build_object('minAvailableVersion', calculated_min_version)
+    where h_id = tablename;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_get_head_table(schema TEXT, tableName TEXT) RETURNS TEXT AS
+$BODY$
+BEGIN
+    IF xyz_table_exists(schema, tableName || '_head') THEN
+        RETURN tableName || '_head';
+    ELSE
+        RETURN tableName;
+    END IF;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_get_root_table(tableName TEXT) RETURNS TEXT AS
+$BODY$
+BEGIN
+    IF tableName LIKE '%_head' THEN
+        RETURN substring(tableName, 1, length(tableName) - 5);
+    ELSE
+        RETURN tableName;
+    END IF;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION xyz_table_exists(schema TEXT, tableName TEXT) RETURNS BOOLEAN AS
+$BODY$
+DECLARE
+    existsResult RECORD;
+BEGIN
+    EXECUTE
+        format('SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = %L AND tablename = %L) AS tableExists', schema, tableName) INTO existsResult;
+    RETURN existsResult.tableExists;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+-- **NOTE:** This variant of the asyncify function is only to be called from JDBC
+CREATE OR REPLACE FUNCTION asyncify(query TEXT, password TEXT) RETURNS VOID AS
+$BODY$
+BEGIN
+    PERFORM set_config('xyz.password', password, false);
+    PERFORM _asyncify(query, false, false);
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+-- **NOTE:** This variant of the asyncify function is only to be called from JDBC
+CREATE OR REPLACE FUNCTION asyncify(query TEXT, password TEXT, procedureCall BOOLEAN) RETURNS VOID AS
+$BODY$
+BEGIN
+    PERFORM set_config('xyz.password', password, false);
+    PERFORM _asyncify(query, false, procedureCall);
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+-- **NOTE:** This variant of the asyncify function is only to be called from within other async functions (that have been called through asyncify themselves)
+CREATE OR REPLACE FUNCTION asyncify(query TEXT) RETURNS VOID AS
+$BODY$
+BEGIN
+    PERFORM _asyncify(query, true, false);
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+-- **NOTE:** This variant of the asyncify function is only to be called from within other async functions (that have been called through asyncify themselves)
+CREATE OR REPLACE FUNCTION asyncify(query TEXT, deferAfterCommit BOOLEAN) RETURNS VOID AS
+$BODY$
+BEGIN
+    PERFORM _asyncify(query, deferAfterCommit, false);
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+-- **NOTE:** This variant of the asyncify function is only to be called from within other async functions (that have been called through asyncify themselves)
+CREATE OR REPLACE FUNCTION asyncify(query TEXT, deferAfterCommit BOOLEAN, procedureCall BOOLEAN) RETURNS VOID AS
+$BODY$
+BEGIN
+    PERFORM _asyncify(query, deferAfterCommit, procedureCall);
+END
+$BODY$
+    LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+-- **NOTE:** This variant of the asyncify function is private and should only be called by the other two variants of the asyncify function
+CREATE OR REPLACE FUNCTION _asyncify(query TEXT, deferAfterCommit BOOLEAN, procedureCall BOOLEAN) RETURNS VOID AS
+$BODY$
+DECLARE
+    password TEXT := current_setting('xyz.password');
+    connectionName TEXT := xyz_random_string(10);
+BEGIN
+    IF deferAfterCommit THEN
+        --Defer the execution (spawn-point) of the query to the end of this thread's execution, to make sure that this thread's transaction has been fully completed / committed before
+        PERFORM set_config('xyz.next_thread', query, false);
+    ELSE
+--         PERFORM CASE WHEN ARRAY['conn'] <@ dblink_get_connections() THEN dblink_disconnect('conn') END;
+--         RAISE NOTICE '~~~~~~~~~~~ Connection name %', connectionName;
+        PERFORM dblink_connect(connectionName, 'host = localhost dbname = ' || current_database() || ' user = ' || CURRENT_USER || ' password = ' || password
+                || ' application_name = ''' || current_setting('application_name') || '''');
+--         PERFORM pg_sleep(1);
+        IF strpos(query, '/*labels(') != 1 THEN
+            --Attach the same labels to the recursive async call
+            query = '/*labels(' || get_query_labels() || ')*/ ' || query;
+        END IF;
+        PERFORM dblink_send_query(connectionName, _create_asyncify_query_block(query, password, procedureCall));
+        PERFORM dblink_disconnect(connectionName);
+    END IF;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+CREATE OR REPLACE FUNCTION _create_asyncify_query_block(query TEXT, password TEXT, procedureCall BOOLEAN) RETURNS TEXT AS
+$BODY$
+BEGIN
+    IF procedureCall THEN
+        RETURN $outer$
+            DO
+            $block$
+            BEGIN
+                SET client_min_messages TO ERROR;
+                SET search_path = $outer$ || current_setting('search_path') || $outer$;
+                PERFORM context('$outer$ || context()::TEXT ||  $outer$'::JSONB);
+                PERFORM set_config('xyz.password', '$outer$ || password || $outer$', false);
+                $outer$ || query || $outer$
+                COMMIT;
+                --Start the follow up thread if one has been registered
+                PERFORM CASE WHEN current_setting('xyz.next_thread', true) IS NOT NULL THEN asyncify(current_setting('xyz.next_thread'), false) END;
+            END
+            $block$;
+        $outer$;
+    ELSE
+        RETURN $block$
+            SET client_min_messages TO ERROR;
+            SET search_path = $block$ || current_setting('search_path') || $block$;
+            SELECT context('$block$ || context()::TEXT ||  $block$'::JSONB);
+            SELECT set_config('xyz.password', '$block$ || password || $block$', false);
+            START TRANSACTION;
+            $block$ || query || $block$;
+            COMMIT;
+            --Start the follow up thread if one has been registered
+            SELECT CASE WHEN current_setting('xyz.next_thread', true) IS NOT NULL THEN asyncify(current_setting('xyz.next_thread'), false) END;
+        $block$;
+    END IF;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION get_query_labels() RETURNS JSON AS
+$BODY$
+DECLARE
+    labels JSON;
+BEGIN
+    SELECT substring(query, strpos(query, '/*labels(') + 9, strpos(query, ')*/') - 9 - strpos(query, '/*labels('))::JSON FROM pg_stat_activity WHERE strpos(query, '/*labels(') > 0 AND pid = pg_backend_pid() INTO labels;
+    return labels;
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htile(qk text, isbase4encoded boolean) RETURNS TABLE(rowy integer, colx integer, lev integer, hkey bigint)
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+declare
+    level integer;
+begin
+    --if(quadkey == nu7ll || !quadkey.matches("[0123]{1,31}"))
+    --  throw new IllegalArgumentException("Quadkey '"+quadkey+"' is invalid!");
+	IF NOT isBase4Encoded THEN
+		qk = htile_number_to_base(qk::bigint, 4);
+    END IF;
+
+    lev = length(qk);
+    --	RAISE NOTICE 'test % ',lev;
+    hkey = htiles_convert_qk_to_longk(qk);
+
+    /** Remove first level bit and convert to x */
+    colX = htiles_utils_modify_bits(hkey & ((1::bigint << lev * 2) - 1),'extract');
+    /** Remove first level bit and convert to y */
+    rowY = htiles_utils_modify_bits(hkey & ((1::bigint << lev * 2) - 1) >> 1, 'extract');
+
+	RETURN next;
+end
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htile(x integer, y integer, level integer) RETURNS bigint
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+begin
+    return htiles_convert_xy_to_long_key(x, y) | (1::bigint << (level * 2));
+end
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htile_bbox(rowy integer, colx integer, lev integer) RETURNS public.geometry
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+declare
+    height float;
+	width float;
+	minX float;
+    minY float;
+    maxX float;
+    maxY float;
+begin
+	IF lev = 0 THEN
+	    height = 180;
+    ELSE
+		height = 360.0 / (1 << lev);
+    END IF;
+
+	width =  360.0 / (1 << lev);
+	minX = width * colX - 180;
+    minY = height * rowY - 90;
+    maxX = width * (colX + 1) - 180;
+    maxY = height * (rowY + 1) - 90;
+
+    --	RAISE NOTICE '% % % % ',minX,minY,maxX,maxY;
+    return st_setsrid(ST_MakeEnvelope( minX, minY, maxX, maxY ),4326);
+end
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htile_number_to_base(num bigint, base integer) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT
+    AS $$
+WITH RECURSIVE n(i, n, r) AS (
+    SELECT -1, num, 0
+  UNION ALL
+    SELECT i + 1, n / base, (n % base)::INT
+    FROM n
+    WHERE n > 0
+)
+SELECT substring(string_agg(ch, ''),2)
+FROM (
+         SELECT CASE
+                    WHEN r BETWEEN 0 AND 9 THEN r::TEXT
+                    WHEN r BETWEEN 10 AND 35 THEN chr(ascii('a') + r - 10)
+                    ELSE '%'
+                END ch
+         FROM n
+            WHERE i >= 0
+         ORDER BY i DESC
+     ) ch
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htiles_convert_qk_to_longk(qk text) RETURNS bigint
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+declare
+    level integer;
+	k integer;
+	hkey bigint;
+begin
+	level = length(qk);
+	hkey = 0;
+	k = level -1;
+
+    FOR i IN 1 .. level
+	LOOP
+		-- RAISE NOTICE '% %',i,substring(qk,level-(i-1),1)::integer;
+		hkey = hkey+ (substring(qk,level-(i-1),1)::bigint << (i-1) * 2);
+    END LOOP;
+    RETURN hkey | (1::bigint << (level * 2));
+end
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htiles_convert_xy_to_long_key(x integer, y integer) RETURNS bigint
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+begin
+    x = htiles_utils_modify_bits(x,'interleave');
+    y = htiles_utils_modify_bits(y,'interleave');
+    return x | (y << 1);
+end
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htiles_utils_modify_bits(num bigint, bmode text) RETURNS bigint
+    LANGUAGE plpgsql IMMUTABLE STRICT
+    AS $$
+declare
+    magicNumbers bigint[] := ARRAY[
+		6148914691236517205,	--110000101001000100100010100011010010001001000110110010100010111001000000101
+		3689348814741910323,	--11001100110011001100110011001100110011001100110011001100110011
+		1085102592571150095,	--111100001111000011110000111100001111000011110000111100001111
+		71777214294589695,		--11111111000000001111111100000000111111110000000011111111
+		281470681808895,		--111111111111111100000000000000001111111111111111
+		4294967295				--11111111111111111111111111111111
+	];
+begin
+	if bmode = 'interleave' THEN
+		num = (num | (num << 16)) & magicNumbers[5];
+		num = (num | (num << 8)) & magicNumbers[4];
+		num = (num | (num << 4)) & magicNumbers[3];
+		num = (num | (num << 2)) & magicNumbers[2];
+		num = (num | (num << 1)) & magicNumbers[1];
+	elseif bmode = 'extract' THEN
+		num = num & magicNumbers[1];
+		num = (num | (num >> 1)) & magicNumbers[2];
+		num = (num | (num >> 2)) & magicNumbers[3];
+		num = (num | (num >> 4)) & magicNumbers[4];
+		num = (num | (num >> 8)) & magicNumbers[5];
+		num = (num | (num >> 16)) & magicNumbers[6];
+else
+		RAISE EXCEPTION 'Invalid mode - choose "interleave" or "extract"';
+end if;
+	-- RAISE NOTICE 'HKey %',num;
+    return num;
+end
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION number_from_base(num text, base integer) RETURNS numeric
+    LANGUAGE sql IMMUTABLE STRICT
+    AS $$
+SELECT sum(exp * cn)
+FROM (
+         SELECT base::NUMERIC ^ (row_number() OVER () - 1) exp,
+         CASE
+           WHEN ch BETWEEN '0' AND '9' THEN ascii(ch) - ascii('0')
+           WHEN ch BETWEEN 'a' AND 'z' THEN 10 + ascii(ch) - ascii('a')
+         END cn
+         FROM regexp_split_to_table(reverse(lower(num)), '') ch(ch)
+     ) sub
+$$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htile_bbox(qk text)
+    returns geometry AS
+$body$
+    select htile_bbox(rowy, colx, lev) from htile( qk,true )
+$body$
+    language sql immutable strict;
+
+CREATE OR REPLACE FUNCTION tile_bbox(htile boolean, qk text) returns geometry
+LANGUAGE plpgsql immutable AS
+$_$
+begin
+    if not htile then
+      return xyz_qk_qk2bbox( qk );
+    else
+      return htile_bbox( qk );
+    end if;
+end
+$_$;
+
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION htile_s_inhabited(iqk text, mlevel integer, _tbl regclass) RETURNS TABLE(qk text)
+    LANGUAGE plpgsql STABLE
+    AS $_$
+declare
+    bFound boolean := false;
+begin
+
+    if length( iqk ) >= mlevel then
+      execute format( 'select exists ( select 1 from %1$s r where st_intersects(r.geo, htile_bbox( %2$L )))', _tbl, iqk ) into bFound;
+	   if bfound then
+	     return query select iqk;
+	   end if;
+	  return;
+   end if;
+
+
+    for lastDigit in 0..3 loop
+        qk = iqk || lastDigit;
+        execute format( 'select exists ( select 1 from %1$s r where st_intersects(r.geo, htile_bbox( %2$L )))', _tbl, qk ) into bFound;
+
+        if bFound then
+            if length( qk ) >= mlevel then
+                return next;
+            else
+                return query
+                    select r.qk from htile_s_inhabited(qk, mlevel, _tbl ) r;
+            end if;
+        end if;
+    end loop;
+end
+$_$;
+
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION qk_s_inhabited(iqk text, mlevel integer, _tbl regclass) RETURNS TABLE(qk text)
+    LANGUAGE plpgsql STABLE
+    AS $_$
+declare
+    bFound boolean := false;
+begin
+
+    if length( iqk ) >= mlevel then
+       execute format( 'select exists ( select 1 from %1$s r where st_intersects(r.geo, xyz_qk_qk2bbox( %2$L )))', _tbl, iqk ) into bFound;
+	   if bfound then
+	     return query select iqk;
+		 end if;
+		 return;
+	  end if;
+
+
+    for lastDigit in 0..3 loop
+        qk = iqk || lastDigit;
+
+        execute format( 'select exists ( select 1 from %1$s r where st_intersects(r.geo, xyz_qk_qk2bbox( %2$L )))', _tbl, qk ) into bFound;
+
+        if bFound then
+            if length( qk ) >= mlevel then
+                return next;
+        else
+            return query
+                select r.qk from qk_s_inhabited(qk, mlevel, _tbl ) r;
+            end if;
+        end if;
+    end loop;
+end
+$_$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION qk_s_get_fc_of_tiles_v1(here_tile_qk boolean, tile_list text[], _tbl regclass, base64enc boolean, clipped boolean ) RETURNS TABLE(tile_id text, tile_content text)
+    LANGUAGE plpgsql stable
+    AS $_$
+declare
+    result record;
+    tile text;
+    fkt_qk2box text := 'xyz_qk_qk2bbox';
+    plainjs text    := 'jsonb_build_object(''type'',''FeatureCollection'',''features'', jsonb_agg(feature) )::text';
+    plaingeo text   := 'geo';
+    feature_count bigint := 0;
+begin
+
+    if here_tile_qk then
+        fkt_qk2box = 'htile_bbox';
+    end if;
+
+    if clipped then
+         plaingeo = 'ST_Intersection(ST_MakeValid( geo ),' || fkt_qk2box || '((%2$L)))';
+    end if;
+
+    if base64enc then
+         plainjs = 'regexp_replace( encode( replace(' || plainjs || ',''\'',''\\'')::bytea, ''base64'' ),''\n'','''',''g'')';
+    end if;
+
+    foreach tile in array tile_list
+    loop
+        begin
+            execute format(
+                        'SELECT %2$L,' || plainjs || ', count(1) as cnt'
+                        ||' from( '
+                        ||' select jsonb_set(jsondata,''{geometry}'',ST_AsGeojson(' || plaingeo ||',8)::jsonb) as feature'
+                        ||'	 from %1$s '
+                        ||'  where ST_Intersects(geo, ' || fkt_qk2box || '(%2$L))'
+                        ||' ) A', _tbl, tile)
+            INTO tile_id, tile_content, feature_count;
+
+            if feature_count > 0 then
+                return next;
+            end if;
+        end;
+    end loop;
+end
+$_$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION qk_s_get_fc_of_tiles_v2(here_tile_qk boolean, tile_list text[], _tbl regclass, base64enc boolean, clipped boolean ) RETURNS TABLE(tile_id text, tile_content text)
+    LANGUAGE plpgsql stable
+    AS $_$
+declare
+    fkt_qk2box text := 'xyz_qk_qk2bbox';
+    plainjs text    := 'jsonb_build_object(''type'',''FeatureCollection'',''features'', features )::text';
+    plaingeo text   := 'geo';
+begin
+    if here_tile_qk then
+       fkt_qk2box = 'htile_bbox';
+    end if;
+
+    if clipped then
+        plaingeo = 'ST_Intersection(ST_MakeValid(d.geo), bbox) as geo';
+    end if;
+
+    if base64enc then
+        plainjs = 'regexp_replace( encode( replace(' || plainjs || ',''\'',''\\'')::bytea, ''base64'' ),''\n'','''',''g'')';
+    end if;
+
+    return query execute
+         format(
+              ' select qk,' || plainjs
+           || ' from'
+           || ' ( select qk, jsonb_agg( jsonb_set(jsondata,''{geometry}'',ST_AsGeojson(geo,8)::jsonb ) ) as features'
+           || '   from'
+           || '   ( select qk, d.jsondata,' || plaingeo
+           || '     from'
+           || '      unnest( %2$L::text[] ) qk,'
+           || '      lateral ' || fkt_qk2box || '( qk ) bbox,'
+           || '      lateral ( select jsondata, geo from %1$s d where st_intersects( d.geo, bbox ) ) d'
+           || '   ) o'
+           || '   group by qk'
+           || ' ) oo' , _tbl, tile_list );
+end
+$_$;
+------------------------------------------------
+------------------------------------------------
+
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION qk_s_inhabited_txt(iqk text, mlevel integer, sql_with_geo text) RETURNS TABLE(qk text)
+ LANGUAGE plpgsql STABLE
+    AS $_$
+declare
+    bFound boolean := false;
+begin
+
+    if length( iqk ) >= mlevel then
+      execute format( 'select exists ( select 1 from ( %1$s ) r where st_intersects(r.geo, xyz_qk_qk2bbox( %2$L )))', sql_with_geo, iqk ) into bFound;
+	   if bfound then
+	     return query select iqk;
+		 end if;
+		 return;
+	  end if;
+
+    for lastDigit in 0..3 loop
+        qk = iqk || lastDigit;
+
+        execute
+        	format( 'select exists ( select 1 from ( %1$s ) r where st_intersects(r.geo, xyz_qk_qk2bbox( %2$L )))', sql_with_geo, qk )
+        	into bFound;
+
+        if bFound then
+            if length( qk ) >= mlevel then
+                return next;
+            else
+                return query
+                    select r.qk from qk_s_inhabited_txt(qk, mlevel, sql_with_geo ) r;
+            end if;
+        end if;
+    end loop;
+end
+$_$;
+
+------------------------------------------------
+------------------------------------------------
+
+CREATE OR REPLACE FUNCTION htile_s_inhabited_txt(iqk text, mlevel integer, sql_with_geo text) RETURNS TABLE(qk text)
+    LANGUAGE plpgsql STABLE
+    AS $_$
+declare
+    bFound boolean := false;
+begin
+
+    if length( iqk ) >= mlevel then
+      execute format( 'select exists ( select 1 from ( %1$s ) r where st_intersects(r.geo, htile_bbox( %2$L )))', sql_with_geo, iqk ) into bFound;
+	   if bfound then
+	     return query select iqk;
+	   end if;
+	  return;
+	end if;
+
+    for lastDigit in 0..3 loop
+        qk = iqk || lastDigit;
+
+        execute
+            format( 'select exists ( select 1 from ( %1$s ) r where st_intersects(r.geo, htile_bbox( %2$L )))', sql_with_geo, qk )
+            into bFound;
+
+        if bFound then
+            if length( qk ) >= mlevel then
+                return next;
+            else
+                return query
+                    select r.qk from htile_s_inhabited_txt(qk, mlevel, sql_with_geo ) r;
+            end if;
+        end if;
+    end loop;
+end
+$_$;
+
+CREATE OR REPLACE FUNCTION tile_s_inhabited_txt(htile boolean, iqk text, mlevel integer, sql_with_geo text) RETURNS TABLE(qk text)
+    LANGUAGE plpgsql STABLE
+    AS $_$
+declare
+    bFound boolean := false;
+begin
+    if not htile then
+      return query
+	     select o.qk from qk_s_inhabited_txt( iqk, mlevel, sql_with_geo ) o;
+    else
+      return query
+ 	     select o.qk from htile_s_inhabited_txt( iqk, mlevel, sql_with_geo ) o;
+
+    end if;
+
+end
+$_$;
+
+------------------------------------------------
+------------------------------------------------
+
+CREATE OR REPLACE FUNCTION qk_s_get_fc_of_tiles_txt_v5(
+	here_tile_qk boolean,
+	tile_list text[],
+	sql_with_jsondata_geo text,
+	base64enc boolean,
+	clipped boolean,
+    includeEmpty boolean)
+    RETURNS TABLE(tile_id text, tile_content text)
+    LANGUAGE 'plpgsql' stable
+AS $BODY$
+declare
+result record;
+    tile text;
+    fkt_qk2box text := 'xyz_qk_qk2bbox';
+	  plainjs text 	:= ' ''{"type": "FeatureCollection", "features":['' || xx.fc || '']}'' ';
+    plaingeo text   := 'geo';
+begin
+    if here_tile_qk then
+        fkt_qk2box = 'htile_bbox';
+    end if;
+    if clipped then
+         plaingeo = 'ST_Intersection(ST_MakeValid( geo ),' || fkt_qk2box || '((%2$L)))';
+    end if;
+    if base64enc then
+         plainjs = 'replace( encode( convert_to( ' || plainjs || ',''UTF-8'' ), ''base64'' ),chr(10),'''')';
+    end if;
+    foreach tile in array tile_list
+    loop
+        begin
+            execute format(
+                'SELECT %2$L,' || plainjs
+                ||' from( '
+                ||'   select string_agg(feature::text,'','') as fc '
+                ||'   from( '
+                ||'    select jsonb_set(jsondata,''{geometry}'',ST_AsGeojson(' || plaingeo ||', 8)::jsonb) as feature'
+                ||'	     from ( %1$s ) o '
+                ||'    where ST_Intersects(geo, ' || fkt_qk2box || '(%2$L))'
+                ||'   ) oo '
+                ||')xx ', sql_with_jsondata_geo, tile)
+             INTO tile_id, tile_content;
+            if tile_content IS NOT null then
+				return next;
+            else
+                if includeEmpty then
+                    tile_id := tile;
+                    if base64enc then
+                        --empty b64_fc
+                        tile_content := null; --'eyJ0eXBlIjogIkZlYXR1cmVDb2xsZWN0aW9uIiwgImZlYXR1cmVzIjpbXX0=';
+                    else
+                        tile_content := null; --'{"type": "FeatureCollection", "features":[]}';
+                    end if;
+                    return next;
+                end if;
+            end if;
+        end;
+    end loop;
+end
+$BODY$;
+
+CREATE OR REPLACE FUNCTION qk_s_get_fc_of_tiles_txt(here_tile_qk boolean, tile_list text[], sql_with_jsondata_geo text, base64enc boolean, clipped boolean, includeEmpty boolean) RETURNS TABLE(tile_id text, tile_content text)
+LANGUAGE sql stable
+AS $_$
+    select tile_id, tile_content from qk_s_get_fc_of_tiles_txt_v5( here_tile_qk, tile_list, sql_with_jsondata_geo, base64enc, clipped, includeEmpty )
+$_$;
+
+------------------------------------------------
+------------------------------------------------
+
+CREATE OR REPLACE FUNCTION qk_s_get_featurelist_of_tiles_txt_v1(
+	here_tile_qk boolean,
+	tile_list text[],
+	sql_with_jsondata_geo text,
+	clipped boolean,
+    includeEmpty boolean)
+    RETURNS TABLE(tile_id text, jsondata jsonb, geo geometry)
+    LANGUAGE 'plpgsql' stable
+AS $BODY$
+declare
+result record;
+    tile text;
+    fkt_qk2box text := 'xyz_qk_qk2bbox';
+    plaingeo text   := 'geo';
+begin
+    if here_tile_qk then
+        fkt_qk2box = 'htile_bbox';
+    end if;
+
+    if clipped then
+         plaingeo = 'ST_Intersection(ST_MakeValid( geo ),' || fkt_qk2box || '((%2$L)))';
+    end if;
+
+    foreach tile in array tile_list
+    loop
+        begin
+            return query execute
+						 format(
+                'SELECT %2$L, xx.* '
+                ||' from( '
+                ||'   select * '
+                ||'   from( '
+                ||'    select jsondata, (' || plaingeo ||') as geo'
+                ||'	   from ( %1$s ) o '
+                ||'    where ST_Intersects(geo, ' || fkt_qk2box || '(%2$L))'
+                ||'   ) oo '
+                ||') xx ', sql_with_jsondata_geo, tile);
+
+				    if not found AND includeEmpty then
+               tile_id := tile;
+							 jsondata := null;
+							 geo := null;
+               return next;
+						end if;
+        end;
+    end loop;
+end
+$BODY$;
+
+CREATE OR REPLACE FUNCTION qk_s_get_featurelist_of_tiles_txt(here_tile_qk boolean, tile_list text[], sql_with_jsondata_geo text, clipped boolean, includeEmpty boolean) RETURNS TABLE(tile_id text, jsondata jsonb, geo geometry)
+LANGUAGE sql stable
+AS $_$
+    select tile_id, jsondata, geo from qk_s_get_featurelist_of_tiles_txt_v1( here_tile_qk, tile_list, sql_with_jsondata_geo, clipped, includeEmpty )
+$_$;
+
+
+------------------------------------------------
+------------------------------------------------
+
+CREATE OR REPLACE FUNCTION _strip_conversion( tileqry_with_geo text ) -- temp workaround to fix sideefect slowing down tilequery DS-758
+	RETURNS text AS
+$$
+ select replace(tileqry_with_geo,'st_geomfromtext(st_astext(geo,8),4326) as geo','geo')
+$$
+LANGUAGE sql IMMUTABLE;
+
+
+create or replace function exp_build_sql_inhabited_txt(htile boolean, iqk text, mlevel integer, sql_with_jsondata_geo text, sql_qk_tileqry_with_geo text, max_tiles integer, base64enc boolean, clipped boolean, includeEmpty boolean)
+ returns table(qk text, mlev integer, sql_with_jsdata_geo text, max_tls integer, bucket integer, nrbuckets integer, nrsubtiles integer, tiles_total integer, tile_list text[], s3sql text)
+language plpgsql stable
+as $_$
+declare
+    v_clipped   text := 'false';
+    v_base64enc text := 'false';
+    v_includeEmpty text := 'false';
+begin
+
+    if clipped then
+        v_clipped = 'true';
+    end if;
+
+    if base64enc then
+       v_base64enc = 'true';
+    end if;
+
+    if includeEmpty then
+       v_includeEmpty = 'true';
+    end if;
+
+    if not htile then
+      return query
+         with
+          indata   as ( select exp_build_sql_inhabited_txt.iqk as iqk,
+                               exp_build_sql_inhabited_txt.mlevel as mlevel,
+                               _strip_conversion(exp_build_sql_inhabited_txt.sql_with_jsondata_geo) as sql_export_data,
+                               _strip_conversion(coalesce( exp_build_sql_inhabited_txt.sql_qk_tileqry_with_geo, exp_build_sql_inhabited_txt.sql_with_jsondata_geo)) as sql_qks,
+                               exp_build_sql_inhabited_txt.max_tiles as max_tiles
+                      ),
+        ibuckets as
+        ( select rr.bucket::integer, (count(1) over ())::integer as nrbuckets, count(1)::integer as nrsubtiles, rr.tiles_total::integer , array_agg(rr.qk) as tlist
+          from ( select count(1) over () tiles_total, ((row_number() over ()) - 1) / i.max_tiles as bucket, r.qk from indata i, qk_s_inhabited_txt(i.iqk, i.mlevel, i.sql_qks ) r ) rr
+            group by rr.bucket, rr.tiles_total
+        )
+        select r.iqk as qk, r.mlevel, r.sql_export_data, r.max_tiles, l.*,
+		       format('select tile_id, tile_content from qk_s_get_fc_of_tiles_txt(false,%1$L::text[],%2$L,%3$s,%4$s,%5$s)',l.tlist,r.sql_export_data,v_base64enc,v_clipped,v_includeEmpty) as s3sql
+        from ibuckets l, indata r
+        order by bucket;
+    else
+      return query
+         with
+          indata   as ( select exp_build_sql_inhabited_txt.iqk as iqk,
+                               exp_build_sql_inhabited_txt.mlevel as mlevel,
+                               _strip_conversion(exp_build_sql_inhabited_txt.sql_with_jsondata_geo) as sql_export_data,
+                               _strip_conversion(coalesce( exp_build_sql_inhabited_txt.sql_qk_tileqry_with_geo, exp_build_sql_inhabited_txt.sql_with_jsondata_geo)) as sql_qks,
+                               exp_build_sql_inhabited_txt.max_tiles as max_tiles
+                      ),
+        ibuckets as
+        ( select rr.bucket::integer, (count(1) over ())::integer as nrbuckets, count(1)::integer as nrsubtiles, rr.tiles_total::integer , array_agg(rr.qk) as tlist
+          from ( select count(1) over () tiles_total, ((row_number() over ()) - 1) / i.max_tiles as bucket, r.qk from indata i, htile_s_inhabited_txt(i.iqk, i.mlevel, i.sql_qks ) r ) rr
+            group by rr.bucket, rr.tiles_total
+        )
+        select r.iqk as qk, r.mlevel, r.sql_export_data, r.max_tiles, l.*,
+		       format('select htiles_convert_qk_to_longk(tile_id)::text as tile_id, tile_content from qk_s_get_fc_of_tiles_txt(true,%1$L::text[],%2$L,%3$s,%4$s,%5$s)',l.tlist,r.sql_export_data,v_base64enc,v_clipped,v_includeEmpty) as s3sql
+        from ibuckets l, indata r
+        order by bucket;
+    end if;
+end
+$_$;
+------------------------------------------------
+------------------------------------------------
+
+------------------------------------------------
+------------------------------------------------
+
+create or replace function exp2_build_sql_inhabited_txt(htile boolean, iqk text, mlevel integer, sql_with_jsondata_geo text, sql_qk_tileqry_with_geo text, max_tiles integer, clipped boolean, includeEmpty boolean)
+ returns table(qk text, mlev integer, sql_with_jsdata_geo text, max_tls integer, bucket integer, nrbuckets integer, nrsubtiles integer, tiles_total integer, tile_list text[], s3sql text)
+language plpgsql stable
+as $_$
+declare
+    v_clipped   text := 'false';
+    v_includeEmpty text := 'false';
+begin
+
+    if clipped then
+        v_clipped = 'true';
+    end if;
+
+    if includeEmpty then
+       v_includeEmpty = 'true';
+    end if;
+
+    if not htile then
+      return query
+         with
+          indata   as ( select exp2_build_sql_inhabited_txt.iqk as iqk,
+                               exp2_build_sql_inhabited_txt.mlevel as mlevel,
+                               _strip_conversion(exp2_build_sql_inhabited_txt.sql_with_jsondata_geo) as sql_export_data,
+                               _strip_conversion(coalesce( exp2_build_sql_inhabited_txt.sql_qk_tileqry_with_geo, exp2_build_sql_inhabited_txt.sql_with_jsondata_geo)) as sql_qks,
+                               exp2_build_sql_inhabited_txt.max_tiles as max_tiles
+                      ),
+        ibuckets as
+        ( select rr.bucket::integer, (count(1) over ())::integer as nrbuckets, count(1)::integer as nrsubtiles, rr.tiles_total::integer , array_agg(rr.qk) as tlist
+          from ( select count(1) over () tiles_total, ((row_number() over ()) - 1) / i.max_tiles as bucket, r.qk from indata i, qk_s_inhabited_txt(i.iqk, i.mlevel, i.sql_qks ) r ) rr
+            group by rr.bucket, rr.tiles_total
+        )
+        select r.iqk as qk, r.mlevel, r.sql_export_data, r.max_tiles, l.*,
+		       format('select tile_id, jsondata, geo from qk_s_get_featurelist_of_tiles_txt(false,%1$L::text[],%2$L,%3$s,%4$s)',l.tlist,r.sql_export_data,v_clipped,v_includeEmpty) as s3sql
+        from ibuckets l, indata r
+        order by bucket;
+    else
+      return query
+         with
+          indata   as ( select exp2_build_sql_inhabited_txt.iqk as iqk,
+                               exp2_build_sql_inhabited_txt.mlevel as mlevel,
+                               _strip_conversion(exp2_build_sql_inhabited_txt.sql_with_jsondata_geo) as sql_export_data,
+                               _strip_conversion(coalesce( exp2_build_sql_inhabited_txt.sql_qk_tileqry_with_geo, exp2_build_sql_inhabited_txt.sql_with_jsondata_geo)) as sql_qks,
+                               exp2_build_sql_inhabited_txt.max_tiles as max_tiles
+                      ),
+        ibuckets as
+        ( select rr.bucket::integer, (count(1) over ())::integer as nrbuckets, count(1)::integer as nrsubtiles, rr.tiles_total::integer , array_agg(rr.qk) as tlist
+          from ( select count(1) over () tiles_total, ((row_number() over ()) - 1) / i.max_tiles as bucket, r.qk from indata i, htile_s_inhabited_txt(i.iqk, i.mlevel, i.sql_qks ) r ) rr
+            group by rr.bucket, rr.tiles_total
+        )
+        select r.iqk as qk, r.mlevel, r.sql_export_data, r.max_tiles, l.*,
+		       format('select htiles_convert_qk_to_longk(tile_id)::text as tile_id, jsondata, st_geomfromtext(st_astext(geo,8),4326) as geo from qk_s_get_featurelist_of_tiles_txt(true,%1$L::text[],%2$L,%3$s,%4$s)',l.tlist,r.sql_export_data,v_clipped,v_includeEmpty) as s3sql
+        from ibuckets l, indata r
+        order by bucket;
+    end if;
+end
+$_$;
+
+------------------------------------------------
+------------------------------------------------
+
+
+
+/*
+Sample:
+
+select
+ (aws_s3.query_export_to_s3( o.s3sql, 'iml-http-connector-sit-s3bucket-9bnjg7jo97un', format('test-mnah-499/space/%s/%s/%s-%s', 'testdyn2' ,o.qk,o.bucket,o.nrbuckets) ,'eu-west-1','format csv')).* ,
+ o.*
+from exp_build_sql_inhabited_txt(true, '013200030201', 12,
+'
+ select jsondata, geo from public."011420244443dfc61dfeaeb154c06b39"
+ where 1 = 1
+   and jsondata->''properties''->''irand'' = to_jsonb( 4 )
+'
+, 7) o
+*/
+------------------------------------------------
+------------------------------------------------
+
+CREATE OR REPLACE FUNCTION exp_qk_weight(
+	htile boolean,
+	startqk text,
+	mlevel integer,
+	mweight double precision,
+	tbls regclass[],
+	sql_qk_tileqry_with_geo text)
+RETURNS TABLE(lev integer, qk text, weight double precision, reltuples bigint)
+LANGUAGE 'plpgsql' stable
+AS $BODY$
+begin
+
+  return query
+   with
+	 hddata as ( select array_agg( coalesce( to_regclass( format('%I.%I',c.relnamespace::regnamespace::text, c.relname::text || '_head') ), c.oid::regclass ) ) as headtbl
+                 from pg_class c, (select unnest(tbls) as tbl)
+                 r	where c.oid = r.tbl
+			   ),
+    indata as  ( select r.tbl, greatest( c.reltuples::bigint, 1) as reltuples from pg_class c , (select unnest( headtbl ) as tbl from hddata ) r	where c.oid = r.tbl ),
+	iindata as ( select tbl, x.reltuples, x.reltuples::float/max(x.reltuples) over () as rweight, sum(x.reltuples) over () as total from indata x ),
+    qkdata as
+    (
+       with recursive t( lev, qk, ew ) as
+       (  select length(startQk) as lev, startQk as qk, 1.0::double precision as ew
+           union all
+            select t.lev+1 as lev, o.qk, o.ew
+            from t, lateral ( select ii.qk, (select sum( u.reltuples * xyz_postgis_selectivity( u.tbl, 'geo', tile_bbox(htile,ii.qk) ) ) / sum( u.reltuples) from iindata u ) as ew
+                              from tile_s_inhabited_txt(htile, t.qk, t.lev+1, sql_qk_tileqry_with_geo ) ii
+                            ) o
+            where 1 = 1
+                and t.ew > mweight
+                and t.lev < least( mlevel, 12 )
+       )
+       select t.lev, t.qk, t.ew from t
+       where 1 = 1
+           and ( t.ew <= mweight or t.lev = least( mlevel, 12 ) )
+    )
+    select r.*, l.reltuples::bigint from qkdata r, (select max(s.total) as reltuples from iindata s) l;
+
+end
+$BODY$;
+
+CREATE OR REPLACE FUNCTION exp_qk_weight(
+	htile boolean,
+	startqk text,
+	mlevel integer,
+	mweight double precision,
+	tbl regclass,
+	sql_qk_tileqry_with_geo text)
+RETURNS TABLE(lev integer, qk text, weight double precision, reltuples bigint)
+language sql stable
+as $_$
+  select * from exp_qk_weight( htile, startqk, mlevel, mweight, array[tbl], sql_qk_tileqry_with_geo )
+$_$;
+
+
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION exp_type_download_precalc(
+	esitmated_count bigint,
+	sql_with_jsondata_geo text,
+	tbl regclass)
+RETURNS int
+    LANGUAGE 'plpgsql' stable
+AS $BODY$
+declare
+    start_parallelization_threshold integer := 500000;
+    max_threads integer := 8;
+	cnt bigint;
+begin
+	if esitmated_count IS null then
+		 execute format('select count(1) from (%1$s) q1', _strip_conversion(sql_with_jsondata_geo) ) into cnt;
+    else
+		cnt := esitmated_count;
+    end if;
+
+	if cnt < start_parallelization_threshold THEN
+		return 1;
+    else
+		return max_threads;
+    end if;
+end
+$BODY$;
+------------------------------------------------
+------------------------------------------------
+
+CREATE OR REPLACE FUNCTION exp_type_vml_precalc(
+	htile boolean,
+	iqk text,
+	mlevel integer,
+	sql_with_jsondata_geo text,
+    sql_qk_tileqry_with_geo text,
+	esitmated_count bigint,
+	tbl regclass)
+RETURNS  TABLE(tilelist text[])
+    LANGUAGE 'plpgsql' volatile
+AS $BODY$
+declare
+	-- defines how much rows a table need till we start parallelization
+    start_parallelization_threshold integer := 500000;
+	-- defines how much features should be in one tile as maximum
+	max_features_in_tile decimal := 5000000;
+	-- default weight - may get overridden
+	_weight decimal := 0.1;
+	max_tiles integer := 5000;
+	calc_weighted_fc decimal;
+	tbllist regclass[];
+	atbl regclass;
+	rtup bigint;
+	sum_rtup bigint := 0;
+begin
+
+    with
+     indata as ( select c.relnamespace::regnamespace::text as s, c.relname::text as t from pg_class c where c.oid = tbl ),
+     iindata as
+     ( select row_number() over () as idx, r.* from
+	     (	select i.s as schem, unnest( array_remove( array[i.t, m.meta#>>'{extends,intermediateTable}', m.meta#>>'{extends,extendedTable}'], null ) ) as tbl from xyz_config.space_meta m right join indata i on ( m.schem = i.s and m.h_id = regexp_replace( i.t, '_head$', '' )) ) r
+     )
+     select array_agg( to_regclass( format('%I.%I',ii.schem, ii.tbl) ) ) from iindata ii
+		 into tbllist;
+
+-- always check if analyse is needed for tables involved
+    for atbl in
+      select tl from unnest( tbllist ) tl
+	loop
+       select c.reltuples::bigint from pg_class c where oid = tbl
+            into rtup;
+
+       if rtup = -1 then
+		    RAISE NOTICE 'ANALYSE NEEDED % - %',rtup, atbl;
+         execute format('ANALYSE %s',atbl);
+         select c.reltuples::bigint from pg_class c where oid = atbl
+            into rtup;
+       end if;
+
+       sum_rtup = sum_rtup + rtup;
+
+	end loop;
+
+    if esitmated_count is null or esitmated_count = 0 THEN
+		 esitmated_count = sum_rtup;
+    end if;
+
+    if esitmated_count < start_parallelization_threshold THEN
+        return query select ARRAY[''];
+        return; -- exit function
+    elseif sql_qk_tileqry_with_geo is not null and length(sql_qk_tileqry_with_geo) > 0 THEN
+        sql_with_jsondata_geo := sql_qk_tileqry_with_geo;
+    end if;
+
+    calc_weighted_fc := esitmated_count * _weight;
+
+    if calc_weighted_fc > max_features_in_tile then
+            _weight := (max_features_in_tile / esitmated_count) ;
+    end if;
+
+    return query select coalesce( ARRAY_AGG(qk), ARRAY[''] )  from (
+        select qk from exp_qk_weight(htile, iqk, mlevel, _weight, tbllist, _strip_conversion(sql_with_jsondata_geo)
+    ) order by weight DESC) a;
+end
+$BODY$;
+------------------------------------------------
+------------------------------------------------
+CREATE OR REPLACE FUNCTION streamId() RETURNS TEXT AS
+$BODY$
+BEGIN
+    RETURN current_setting('xyz.streamId');
+EXCEPTION WHEN OTHERS THEN RETURN 'no-streamId';
+END
+$BODY$
+    LANGUAGE plpgsql VOLATILE;
+
+CREATE OR REPLACE FUNCTION streamId(sid TEXT) RETURNS VOID AS
+$BODY$
+BEGIN
+    PERFORM set_config('xyz.streamId', sid, true);
+END
+$BODY$
+LANGUAGE plpgsql VOLATILE;
+------------------------------------------------
+------------------------------------------------
+DROP FUNCTION IF EXISTS enrichNewFeature(IN jsondata JSONB, geo geometry(GeometryZ,4326));
+DROP FUNCTION IF EXISTS xyz_import_trigger_for_empty_layer();
+DROP FUNCTION IF EXISTS xyz_import_trigger_for_empty_layer_geojsonfc();
+DROP FUNCTION IF EXISTS xyz_import_trigger_for_non_empty_layer();
+DROP FUNCTION IF EXISTS xyz_import_get_work_item(temporary_tbl REGCLASS);
+DROP FUNCTION IF EXISTS xyz_import_perform(schem TEXT, temporary_tbl REGCLASS ,target_tbl REGCLASS, s3_bucket TEXT, s3_path TEXT, s3_region TEXT, format TEXT, filesize BIGINT);
+DROP FUNCTION IF EXISTS xyz_import_get_import_config(format TEXT);
+DROP FUNCTION IF EXISTS xyz_import_report_success(temporary_tbl REGCLASS, success_callback TEXT);
+DROP PROCEDURE IF EXISTS xyz_import_start(schem TEXT, temporary_tbl REGCLASS, target_tbl REGCLASS, format TEXT, success_callback TEXT, failure_callback TEXT);

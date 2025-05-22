@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2020 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import com.here.xyz.hub.util.diff.Difference.DiffMap;
 import com.here.xyz.hub.util.diff.Difference.Insert;
 import com.here.xyz.hub.util.diff.Difference.Remove;
 import com.here.xyz.hub.util.diff.Difference.Update;
+import com.here.xyz.models.hub.FeatureModificationList.ConflictResolution;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -226,7 +227,7 @@ public class Patcher {
    * @return a merged difference.
    * @throws MergeConflictException if a conflict that is not automatically solvable occurred.
    */
-  public static <T extends Difference> Difference mergeDifferences(final T diffA, final T diffB) throws MergeConflictException {
+  public static <T extends Difference> Difference mergeDifferences(final T diffA, final T diffB, ConflictResolution cr ) throws MergeConflictException {
     if (diffA == null) {
       return diffB;
     }
@@ -240,25 +241,39 @@ public class Patcher {
     }
 
     if (diffA instanceof DiffList) {
-      return mergeListDifferences((DiffList) diffA, (DiffList) diffB);
+      return mergeListDifferences((DiffList) diffA, (DiffList) diffB, cr);
     }
 
     if (diffA instanceof DiffMap) {
-      return mergeMapDifferences((DiffMap) diffA, (DiffMap) diffB);
+      return mergeMapDifferences((DiffMap) diffA, (DiffMap) diffB, cr);
     }
 
-    if (diffA instanceof Update) {
-      final Object valueA = ((Update) diffA).newValue();
-      final Object valueB = ((Update) diffB).newValue();
+    if (diffA instanceof Update || diffA instanceof Insert) {
+      Object valueA;
+      Object valueB;
+
+      if (diffA instanceof Update) {
+        valueA = ((Update) diffA).newValue();
+        valueB = ((Update) diffB).newValue();
+      } else {
+        valueA = ((Insert) diffA).newValue();
+        valueB = ((Insert) diffB).newValue();
+      }
+
       if (valueA != valueB) {
         if (valueA == null || valueB == null || valueA.getClass() != valueB.getClass() || !valueA.equals(valueB)) {
-          throw new MergeConflictException("Conflict while merging " + diffA + " with " + diffB);
+          switch(cr) {
+            case ERROR:
+              throw new MergeConflictException("Conflict while merging " + diffA + " with " + diffB);
+            case RETAIN:
+              return diffA;
+            case REPLACE:
+              return diffB;
+          }
         }
       }
     }
 
-    // if( diffA instanceof Remove) {
-    // }
     return diffA;
   }
 
@@ -267,16 +282,17 @@ public class Patcher {
    *
    * @param diffA an object difference.
    * @param diffB another object difference.
+   * @param cr
    * @return the merged object difference.
    * @throws MergeConflictException if a conflict that is not automatically solvable occurred.
    * @throws MergeConflictException if any error related to JSON occurred.
    */
-  private static DiffMap mergeMapDifferences(DiffMap diffA, DiffMap diffB) throws MergeConflictException {
+  private static DiffMap mergeMapDifferences(DiffMap diffA, DiffMap diffB, ConflictResolution cr) throws MergeConflictException {
     final DiffMap mergedDiff = new DiffMap();
 
     Set<Object> diffAKeys = diffA.keySet();
     for (Object key : diffAKeys) {
-      mergedDiff.put(key, mergeDifferences(diffA.get(key), diffB.get(key)));
+      mergedDiff.put(key, mergeDifferences(diffA.get(key), diffB.get(key), cr));
     }
 
     Set<Object> diffBKeys = diffB.keySet();
@@ -294,11 +310,12 @@ public class Patcher {
    *
    * @param diffA a list difference.
    * @param diffB another list difference.
+   * @param cr
    * @return the merged list difference.
    * @throws MergeConflictException if a conflict that is not automatically solvable occurred.
    * @throws NullPointerException if either diffA or diffB are null.
    */
-  private static DiffList mergeListDifferences(DiffList diffA, DiffList diffB) throws MergeConflictException {
+  private static DiffList mergeListDifferences(DiffList diffA, DiffList diffB, ConflictResolution cr) throws MergeConflictException {
     final int aLength = diffA.size();
     final int bLength = diffB.size();
     final int MAX = Math.max(aLength, bLength);
@@ -405,7 +422,7 @@ public class Patcher {
           if (!(b instanceof DiffMap)) {
             throw new MergeConflictException("Conflict while merging " + a + " with " + b + ", collision on index " + i + ".");
           }
-          mergeDiff.add(mergeMapDifferences((DiffMap) a, (DiffMap) b));
+          mergeDiff.add(mergeMapDifferences((DiffMap) a, (DiffMap) b, cr));
           continue;
         }
 
@@ -414,7 +431,7 @@ public class Patcher {
           if (!(b instanceof DiffList)) {
             throw new MergeConflictException("Conflict while merging " + a + " with " + b + ", collision on index " + i + ".");
           }
-          mergeDiff.add(mergeListDifferences((DiffList) a, (DiffList) b));
+          mergeDiff.add(mergeListDifferences((DiffList) a, (DiffList) b, cr));
           continue;
         }
 
@@ -436,6 +453,9 @@ public class Patcher {
    * @param diff The difference object.
    */
   public static void patch(Object obj, final Difference diff) {
+    if( diff == null )
+      return;
+
     if (obj instanceof Map) {
       if (!(diff instanceof DiffMap)) {
         throw new IllegalArgumentException("Patch failed, the object is a Map, but the difference is no DiffMap");
@@ -556,25 +576,27 @@ public class Patcher {
         continue;
       }
 
-      if (partialUpdate.get(key) == null) {
+      final V partialUpdateVal = partialUpdate.get(key);
+      final V sourceObjectVal = sourceObject.get(key);
+      if (partialUpdateVal == null) {
         if (sourceObject.containsKey(key)) {
-          diff.put(key, new Remove(sourceObject.get(key)));
+          diff.put(key, new Remove(sourceObjectVal));
         }
-      } else if (!sourceObject.containsKey(key)) {
-        diff.put(key, new Insert(partialUpdate.get(key)));
-      } else if (recursive && sourceObject.get(key) instanceof Map && partialUpdate.get(key) instanceof Map) {
-        diff.put(key,
-            calculateDifferenceOfPartialUpdate((Map<K, V>) sourceObject.get(key), (Map<K, V>) partialUpdate.get(key), ignoreKeys, true));
-      } else {
-        diff.put(key, new Update(sourceObject.get(key), partialUpdate.get(key)));
+      } else if (sourceObjectVal == null ) {
+        diff.put(key, new Insert(partialUpdateVal));
+      } else if (recursive && sourceObjectVal instanceof Map && partialUpdateVal instanceof Map) {
+        Difference childDiff = calculateDifferenceOfPartialUpdate((Map<K, V>) sourceObjectVal, (Map<K, V>) partialUpdateVal, ignoreKeys,true);
+        if( childDiff != null )
+          diff.put(key, childDiff);
+      } else if (!sourceObjectVal.equals(partialUpdateVal)) {
+        diff.put(key, new Update(sourceObjectVal, partialUpdateVal));
       }
     }
-
-    return diff;
+    return diff.size() == 0 ? null : diff;
   }
 
   /**
-   * An exception thrown if applying a patch fails, the creation of a difference fails or any other merge error occurrs.
+   * An exception thrown if applying a patch fails, the creation of a difference fails or any other merge error occurs.
    */
   public static class MergeConflictException extends Exception {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,40 +19,25 @@
 
 package com.here.xyz.hub.cache;
 
-import io.vertx.core.Handler;
+import io.vertx.core.Future;
 
 public class NoopCacheClient implements CacheClient {
 
 	@Override
-	public void get(String key, Handler<String> handler) {
-		handler.handle(null);
-		return;
+	public Future<byte[]> get(String key) {
+		return Future.succeededFuture(null);
 	}
 
 	@Override
-	public void getBinary(String key, Handler<byte[]> handler) {
-		handler.handle(null);
-		return;
-	}
-
-	@Override
-	public void set(String key, String value, long ttl) {
-		return;
-	}
-
-	@Override
-	public void setBinary(String key, byte[] value, long ttl) {
-		return;
-	}
+	public void set(String key, byte[] value, long ttl) {
+  }
 
 	@Override
 	public void remove(String key) {
-		return;
-	}
+  }
 
 	@Override
 	public void shutdown() {
 		//Nothing to do.
 	}
-
 }

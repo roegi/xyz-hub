@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2020 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,14 +21,18 @@ package com.here.xyz.hub.connectors;
 
 import static org.junit.Assert.assertEquals;
 
+import com.here.xyz.hub.Config;
+import com.here.xyz.hub.Service;
 import com.here.xyz.hub.connectors.models.Connector;
+import com.here.xyz.util.service.Core;
+import io.vertx.core.Vertx;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Test;
 
+@SuppressWarnings("unused")
 public class RFCMeasurement {
 
     MockedRemoteFunctionClient rfc;
@@ -40,15 +44,23 @@ public class RFCMeasurement {
 
     @Before
     public void setup() {
+        //Mock necessary configuration values
+        Core.vertx = Vertx.vertx();
+        Service.configuration = new Config();
+        Service.configuration.REMOTE_FUNCTION_REQUEST_TIMEOUT = 26;
+        Service.configuration.INSTANCE_COUNT = 1;
+        Service.configuration.REMOTE_FUNCTION_MAX_CONNECTIONS = 256;
+        Service.configuration.REMOTE_FUNCTION_CONNECTION_HIGH_UTILIZATION_THRESHOLD = 0.75f;
+        Service.configuration.GLOBAL_MAX_QUEUE_SIZE = 1024;
+
         Connector s = new Connector();
-        TEST_START = System.currentTimeMillis();
-        MockedRemoteFunctionClient.MockedRequest.testStart = TEST_START;
         s.id = "testStorage";
         s.connectionSettings = new Connector.ConnectionSettings();
         s.connectionSettings.maxConnections = RFC_MAX_CONNECTIONS;
         rfc = new MockedRemoteFunctionClient(s, 10);
-
         requesterPool = new ScheduledThreadPoolExecutor(20);
+        TEST_START = Core.currentTimeMillis();
+        MockedRemoteFunctionClient.MockedRequest.testStart = TEST_START;
     }
 
     @After
@@ -62,14 +74,13 @@ public class RFCMeasurement {
 
     public void checkMeasuring(int concurrency, long offset, long interval, long measureDelay, int expectedArrivalRate,
                                int expectedThroughput) throws InterruptedException {
-        ScheduledFuture f = requesterPool.scheduleAtFixedRate(() -> {
+        byte[] payload = new byte[0];
+        ScheduledFuture<?> f = requesterPool.scheduleAtFixedRate(() -> {
             for (int i = 0; i < concurrency; i++) {
-                long now = System.currentTimeMillis();
-                System.out.println("Submitted at: " + (now - TEST_START));
-                rfc.submit(null, null, r -> {
+                long now = Core.currentTimeMillis();
+                rfc.submit(null, payload, false, false, r -> {
                     //Nothing to do
-                });
-                System.out.println("Submit took: " + (System.currentTimeMillis() - now));
+                }, null);
             }
         }, offset, interval, TimeUnit.MILLISECONDS);
 
@@ -78,19 +89,16 @@ public class RFCMeasurement {
         double ar = rfc.getArrivalRate();
         double tp = rfc.getThroughput();
 
-        System.out.println("Arrival rate: " + ar);
-        System.out.println("Throughput: " + tp);
 
         assertEquals("arrivalRate should match", expectedArrivalRate, Math.round(ar));
         assertEquals("throughput should match", expectedThroughput, Math.round(tp));
     }
 
-    @Test
+    //@Test
     public void checkMeasuringBelowLimits() throws InterruptedException {
         checkMeasuring(4, 200, 1000, 1300, 4, 4);
     }
 
-    //TODO: Write more tests
     //@Test
     public void checkMeasuringExceedConcurrencyLimit() throws InterruptedException {
         checkMeasuring(10,200, 1000, 1300, 10, RFC_MAX_CONNECTIONS);

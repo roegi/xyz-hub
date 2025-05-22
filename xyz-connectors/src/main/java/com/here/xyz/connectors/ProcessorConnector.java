@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 package com.here.xyz.connectors;
 
 import com.here.xyz.Payload;
-import com.here.xyz.events.DeleteFeaturesByTagEvent;
 import com.here.xyz.events.Event;
 import com.here.xyz.events.EventNotification;
 import com.here.xyz.events.GetFeaturesByBBoxEvent;
@@ -32,21 +31,22 @@ import com.here.xyz.events.HealthCheckEvent;
 import com.here.xyz.events.IterateFeaturesEvent;
 import com.here.xyz.events.ModifyFeaturesEvent;
 import com.here.xyz.events.ModifySpaceEvent;
+import com.here.xyz.events.ModifySubscriptionEvent;
 import com.here.xyz.events.SearchForFeaturesEvent;
+import com.here.xyz.events.WriteFeaturesEvent;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
-import com.here.xyz.models.geojson.implementation.XyzError;
 import com.here.xyz.responses.ErrorResponse;
-import com.here.xyz.responses.HealthStatus;
 import com.here.xyz.responses.ModifiedEventResponse;
 import com.here.xyz.responses.ModifiedResponseResponse;
 import com.here.xyz.responses.StatisticsResponse;
 import com.here.xyz.responses.SuccessResponse;
+import com.here.xyz.responses.XyzError;
 import com.here.xyz.responses.XyzResponse;
 
 /**
- * This class could be extended by any listener connector implementations.
+ * This class could be extended by any processor connector implementations.
  */
-@SuppressWarnings({"WeakerAccess", "unused"})
+@SuppressWarnings({"WeakerAccess", "unused", "rawtypes"})
 public abstract class ProcessorConnector extends AbstractConnectorHandler {
 
   public static final String REQUEST = ".request";
@@ -65,12 +65,7 @@ public abstract class ProcessorConnector extends AbstractConnectorHandler {
   }
 
   public XyzResponse processEventNotification(EventNotification notification) throws Exception {
-    if (notification == null) {
-      throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Unknown event type");
-    }
-
-    final NotificationParams notificationParams = new NotificationParams(notification.getParams(), notification.getConnectorParams(),
-        notification.getMetadata(), notification.getTid());
+    final NotificationParams notificationParams = getNotificationParams(notification);
 
     if (notification.getEvent() instanceof ErrorResponse) {
       return processErrorResponse((ErrorResponse) notification.getEvent(), notification.getEventType(), notificationParams);
@@ -83,6 +78,12 @@ public abstract class ProcessorConnector extends AbstractConnectorHandler {
     }
     if ((ModifySpaceEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
       return wrapResponse(processModifySpace((SuccessResponse) notification.getEvent(), notificationParams));
+    }
+    if ((ModifySubscriptionEvent.class.getSimpleName() + REQUEST).equals(eventType)) {
+      return wrapEvent(processModifySubscription((ModifySubscriptionEvent) notification.getEvent(), notificationParams));
+    }
+    if ((ModifySubscriptionEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
+      return wrapResponse(processModifySubscription((SuccessResponse) notification.getEvent(), notificationParams));
     }
     if ((GetStatisticsEvent.class.getSimpleName() + REQUEST).equals(eventType)) {
       return wrapEvent(processGetStatistics((GetStatisticsEvent) notification.getEvent(), notificationParams));
@@ -132,18 +133,12 @@ public abstract class ProcessorConnector extends AbstractConnectorHandler {
     if ((ModifyFeaturesEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
       return wrapResponse(processModifyFeatures((FeatureCollection) notification.getEvent(), notificationParams));
     }
-    if ((DeleteFeaturesByTagEvent.class.getSimpleName() + REQUEST).equals(eventType)) {
-      return wrapEvent(processDeleteFeaturesByTag((DeleteFeaturesByTagEvent) notification.getEvent(), notificationParams));
-    }
-    if ((DeleteFeaturesByTagEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
-      return wrapResponse(processDeleteFeaturesByTag((FeatureCollection) notification.getEvent(), notificationParams));
-    }
 
-    // if any of the events was catched, throws an error.
+    // if any of the events were caught, throws an error.
     throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Unknown event type '" + eventType + "'");
   }
 
-  private ModifiedEventResponse wrapEvent(Event event) {
+    private ModifiedEventResponse wrapEvent(Event event) {
     return new ModifiedEventResponse().withEvent(event);
   }
 
@@ -155,16 +150,6 @@ public abstract class ProcessorConnector extends AbstractConnectorHandler {
   @SuppressWarnings("RedundantThrows")
   @Override
   protected void initialize(Event event) throws Exception {
-  }
-
-  protected XyzResponse processHealthCheckEvent(HealthCheckEvent event) {
-    if (event.getMinResponseTime() != 0) {
-      try {
-        Thread.sleep(event.getMinResponseTime());
-      } catch (InterruptedException ignored) {
-      }
-    }
-    return new HealthStatus();
   }
 
   protected GetFeaturesByIdEvent processGetFeaturesById(GetFeaturesByIdEvent event, NotificationParams notificationParams)
@@ -220,11 +205,6 @@ public abstract class ProcessorConnector extends AbstractConnectorHandler {
     throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
   }
 
-  protected DeleteFeaturesByTagEvent processDeleteFeaturesByTag(DeleteFeaturesByTagEvent event, NotificationParams notificationParams)
-      throws Exception {
-    throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
-  }
-
   protected FeatureCollection processDeleteFeaturesByTag(FeatureCollection response, NotificationParams notificationParams)
       throws Exception {
     throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
@@ -238,11 +218,27 @@ public abstract class ProcessorConnector extends AbstractConnectorHandler {
     throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
   }
 
+  protected WriteFeaturesEvent processWriteFeatures(WriteFeaturesEvent event, NotificationParams notificationParams) throws Exception {
+    throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
+  }
+
+  protected FeatureCollection processWriteFeatures(FeatureCollection response, NotificationParams notificationParams) throws Exception {
+    throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
+  }
+
   protected ModifySpaceEvent processModifySpace(ModifySpaceEvent event, NotificationParams notificationParams) throws Exception {
     throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
   }
 
   protected SuccessResponse processModifySpace(SuccessResponse response, NotificationParams notificationParams) throws Exception {
+    throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
+  }
+
+  protected ModifySubscriptionEvent processModifySubscription(ModifySubscriptionEvent event, NotificationParams notificationParams) throws Exception {
+    throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
+  }
+
+  protected SuccessResponse processModifySubscription(SuccessResponse response, NotificationParams notificationParams) throws Exception {
     throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Not implemented by this processor");
   }
 

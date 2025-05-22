@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ package com.here.xyz.connectors;
 
 
 import com.here.xyz.Typed;
-import com.here.xyz.events.DeleteFeaturesByTagEvent;
+import com.here.xyz.events.ContentModifiedNotification;
 import com.here.xyz.events.Event;
 import com.here.xyz.events.EventNotification;
 import com.here.xyz.events.GetFeaturesByBBoxEvent;
@@ -34,22 +34,23 @@ import com.here.xyz.events.IterateFeaturesEvent;
 import com.here.xyz.events.ModifyFeaturesEvent;
 import com.here.xyz.events.ModifySpaceEvent;
 import com.here.xyz.events.SearchForFeaturesEvent;
+import com.here.xyz.events.WriteFeaturesEvent;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
-import com.here.xyz.models.geojson.implementation.XyzError;
 import com.here.xyz.responses.ErrorResponse;
 import com.here.xyz.responses.StatisticsResponse;
 import com.here.xyz.responses.SuccessResponse;
+import com.here.xyz.responses.XyzError;
 
 /**
  * This class could be extended by any listener connector implementations.
  */
-@SuppressWarnings({"WeakerAccess", "EmptyMethod", "unused"})
+@SuppressWarnings({"WeakerAccess", "EmptyMethod", "unused", "rawtypes"})
 public abstract class ListenerConnector extends AbstractConnectorHandler {
 
   @Override
   protected Typed processEvent(Event event) throws Exception {
     if (event instanceof HealthCheckEvent) {
-      processHealthCheckEvent((HealthCheckEvent) event);
+      return processHealthCheckEvent((HealthCheckEvent) event);
     } else if (event instanceof EventNotification) {
       processEventNotification((EventNotification) event);
     } else {
@@ -65,12 +66,7 @@ public abstract class ListenerConnector extends AbstractConnectorHandler {
   }
 
   public void processEventNotification(EventNotification notification) throws Exception {
-    if (notification == null) {
-      throw new ErrorResponseException(streamId, XyzError.NOT_IMPLEMENTED, "Unknown event type");
-    }
-
-    final NotificationParams notificationParams = new NotificationParams(notification.getParams(), notification.getConnectorParams(),
-        notification.getMetadata(), notification.getTid());
+    final NotificationParams notificationParams = getNotificationParams(notification);
 
     if (notification.getEvent() instanceof ErrorResponse) {
       processErrorResponse((ErrorResponse) notification.getEvent(), notification.getEventType(), notificationParams);
@@ -132,20 +128,14 @@ public abstract class ListenerConnector extends AbstractConnectorHandler {
     if ((ModifyFeaturesEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
       processModifyFeatures((FeatureCollection) notification.getEvent(), notificationParams);
     }
-    if ((DeleteFeaturesByTagEvent.class.getSimpleName() + REQUEST).equals(eventType)) {
-      processDeleteFeaturesByTag((DeleteFeaturesByTagEvent) notification.getEvent(), notificationParams);
+    if ((WriteFeaturesEvent.class.getSimpleName() + REQUEST).equals(eventType)) {
+      processWriteFeatures((WriteFeaturesEvent) notification.getEvent(), notificationParams);
     }
-    if ((DeleteFeaturesByTagEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
-      processDeleteFeaturesByTag((FeatureCollection) notification.getEvent(), notificationParams);
+    if ((ModifyFeaturesEvent.class.getSimpleName() + RESPONSE).equals(eventType)) {
+      processWriteFeatures((WriteFeaturesEvent) notification.getEvent(), notificationParams);
     }
-  }
-
-  protected void processHealthCheckEvent(HealthCheckEvent event) {
-    if (event.getMinResponseTime() != 0) {
-      try {
-        Thread.sleep(event.getMinResponseTime());
-      } catch (InterruptedException ignored) {
-      }
+    if ((ContentModifiedNotification.class.getSimpleName() + REQUEST).equals(eventType)) {
+      processContentModifiedNotification((ContentModifiedNotification) notification.getEvent(), notificationParams);
     }
   }
 
@@ -193,20 +183,17 @@ public abstract class ListenerConnector extends AbstractConnectorHandler {
   protected void processSearchForFeatures(SearchForFeaturesEvent event, NotificationParams notificationParams) throws Exception {
   }
 
-  @SuppressWarnings("RedundantThrows")
   protected void processSearchForFeatures(FeatureCollection response, NotificationParams notificationParams) throws Exception {
-  }
-
-  @SuppressWarnings("RedundantThrows")
-  protected void processDeleteFeaturesByTag(DeleteFeaturesByTagEvent event, NotificationParams notificationParams) throws Exception {
   }
 
   @SuppressWarnings("RedundantThrows")
   protected void processDeleteFeaturesByTag(FeatureCollection response, NotificationParams notificationParams) throws Exception {
   }
 
-  @SuppressWarnings("RedundantThrows")
   protected void processModifyFeatures(ModifyFeaturesEvent event, NotificationParams notificationParams) throws Exception {
+  }
+
+  protected void processWriteFeatures(WriteFeaturesEvent event, NotificationParams notificationParams) throws Exception {
   }
 
   @SuppressWarnings("RedundantThrows")
@@ -230,6 +217,12 @@ public abstract class ListenerConnector extends AbstractConnectorHandler {
   }
 
   @SuppressWarnings("RedundantThrows")
+  protected void processContentModifiedNotification(ContentModifiedNotification event, NotificationParams notificationParams)
+      throws Exception {
+  }
+
+  @SuppressWarnings("RedundantThrows")
   protected void processErrorResponse(ErrorResponse response, String eventType, NotificationParams notificationParams) throws Exception {
   }
+
 }

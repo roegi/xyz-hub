@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,50 +19,45 @@
 
 package com.here.xyz;
 
+import static com.here.xyz.XyzSerializable.Mappers.SORTED_MAPPER;
+
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.common.io.ByteStreams;
 import com.here.xyz.events.Event;
+import com.here.xyz.models.hub.FeatureModificationList;
 import com.here.xyz.responses.XyzResponse;
 import com.here.xyz.util.Hasher;
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 @JsonSubTypes({
     @JsonSubTypes.Type(value = Event.class),
-    @JsonSubTypes.Type(value = XyzResponse.class)
+    @JsonSubTypes.Type(value = XyzResponse.class),
+    @JsonSubTypes.Type(value = ChangeNotification.class),
+    @JsonSubTypes.Type(value = FeatureChange.class),
+    @JsonSubTypes.Type(value = FeatureModificationList.class)
 })
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Payload implements Typed {
 
-  private static final Logger logger = LoggerFactory.getLogger(Event.class);
-  @JsonIgnore
-  private static final ThreadLocal<MessageDigest> sha256 = ThreadLocal.withInitial(() -> {
-    try {
-      return MessageDigest.getInstance("SHA-256");
-    } catch (NoSuchAlgorithmException e) {
-      logger.error("An unexpected NoSuchAlgorithmException ", e);
-      return null;
-    }
-  });
+  public static final String VERSION = "0.8.0";
 
   public static InputStream prepareInputStream(InputStream input) throws IOException {
-    if (!input.markSupported()) {
+    if (!input.markSupported())
       input = new BufferedInputStream(input);
-    }
 
-    if (isCompressed(input)) {
+    if (isCompressed(input))
       input = gunzip(input);
-    }
 
     return input;
   }
@@ -71,7 +66,8 @@ public class Payload implements Typed {
   public static InputStream gunzip(InputStream is) throws IOException {
     try {
       return new BufferedInputStream(new GZIPInputStream(is));
-    } catch (ZipException z) {
+    }
+    catch (ZipException z) {
       return is;
     }
   }
@@ -79,7 +75,8 @@ public class Payload implements Typed {
   public static OutputStream gzip(OutputStream os) throws IOException {
     try {
       return new GZIPOutputStream(os);
-    } catch (ZipException z) {
+    }
+    catch (ZipException z) {
       return os;
     }
   }
@@ -90,22 +87,25 @@ public class Payload implements Typed {
    *
    * @param is an input stream
    * @return true if the array is compressed or false otherwise
-   * @throws java.io.IOException if the byte array couldn't be read
    */
-  public static boolean isCompressed(InputStream is) throws IOException {
+  public static boolean isCompressed(InputStream is) {
     try {
-      if (!is.markSupported()) {
+      if (!is.markSupported())
         is = new BufferedInputStream(is);
-      }
 
       byte[] bytes = new byte[2];
       is.mark(2);
-      boolean empty = (is.read(bytes) == 0);
+      is.read(bytes);
       is.reset();
-      return empty | (bytes[0] == (byte) GZIPInputStream.GZIP_MAGIC && bytes[1] == (byte) (GZIPInputStream.GZIP_MAGIC >> 8));
-    } catch (Exception e) {
+      return isGzipped(bytes);
+    }
+    catch (Exception e) {
       return false;
     }
+  }
+
+  public static boolean isGzipped(byte[] bytes) {
+    return bytes != null && bytes.length >= 2 && GZIPInputStream.GZIP_MAGIC == (((int) bytes[0] & 0xff) | ((bytes[1] << 8) & 0xff00));
   }
 
   public static byte[] compress(byte[] bytes) {
@@ -113,11 +113,36 @@ public class Payload implements Typed {
 
     try (GZIPOutputStream gos = new GZIPOutputStream(baos)) {
       gos.write(bytes);
-    } catch (IOException e) {
+    }
+    catch (IOException e) {
       return null;
     }
 
     return baos.toByteArray();
+  }
+
+  public static byte[] decompress(final byte[] bytes) throws IOException {
+    return ByteStreams.toByteArray(Payload.prepareInputStream(new ByteArrayInputStream(bytes)));
+  }
+
+  /**
+   * @param versionA
+   * @param versionB
+   * @return -1 if versionA is smaller than versionB, 0 if versionA equals versionB, 1 if versionA is larger than versionB.
+   */
+  public static int compareVersions(String versionA, String versionB) {
+    String[] partsA = versionA.split(".");
+    String[] partsB = versionB.split(".");
+    if (partsA.length != partsB.length)
+      throw new IllegalArgumentException("Incompatible version strings.");
+    for (int i = 0; i < partsA.length; i++) {
+      int versionPartA = Integer.parseInt(partsA[i]), versionPartB = Integer.parseInt(partsB[i]);
+      if (versionPartA < versionPartB)
+        return -1;
+      else if (versionPartA > versionPartB)
+        return 1;
+    }
+    return 0;
   }
 
   /**
@@ -127,7 +152,8 @@ public class Payload implements Typed {
   public String getHash() {
     try {
       return Hasher.getHash(getCacheString());
-    } catch (JsonProcessingException e) {
+    }
+    catch (JsonProcessingException e) {
       throw new RuntimeException(e);
     }
   }
@@ -136,14 +162,23 @@ public class Payload implements Typed {
   @JsonIgnore
   public String getCacheString() throws JsonProcessingException {
     return SORTED_MAPPER.get()
-        // Adding .writerWithView(Object.class) will serialize all properties, which do not have a view annotation. Any properties, which
-        // are not used as an input to generate the response(e.g. the request log stream Id) and do not result in a change of the response
-        // must be annotated with a view ( e.g. @JsonView(ExcludeFromHash.class) )
+        /*
+        Adding .writerWithView(Object.class) will serialize all properties, which do not have a view annotation. Any properties, which
+        are not used as an input to generate the response(e.g. the request log stream ID) and do not result in a change of the response
+        must be annotated with a view (e.g. @JsonView(ExcludeFromHash.class))
+         */
         .writerWithView(Object.class)
         .writeValueAsString(this);
   }
 
-  protected static class ExcludeFromHash {
-
+  @Override
+  public String toString() {
+    return serialize();
   }
+
+  /**
+   * Used as a JsonView on {@link Payload} models to indicate that a property should not be taken into account for hashing.
+   * (e.g. when it comes to cache-key generation)
+   */
+  public static class ExcludeFromHash {}
 }

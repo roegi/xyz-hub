@@ -19,6 +19,9 @@
 
 package com.here.xyz.hub.auth;
 
+import com.here.xyz.models.hub.jwt.ActionMatrix;
+import com.here.xyz.models.hub.jwt.AttributeMap;
+
 @SuppressWarnings("serial")
 public class XyzHubActionMatrix extends ActionMatrix {
 
@@ -29,6 +32,7 @@ public class XyzHubActionMatrix extends ActionMatrix {
   public static final String MANAGE_SPACES = "manageSpaces";
   public static final String ADMIN_SPACES = "adminSpaces";
   public static final String ACCESS_CONNECTORS = "accessConnectors";
+  public static final String MANAGE_CONNECTORS = "manageConnectors";
   public static final String MANAGE_PACKAGES = "managePackages";
   public static final String USE_CAPABILITIES = "useCapabilities";
   public static final String USE_ADMIN_CAPABILITIES = "useAdminCapabilities";
@@ -66,6 +70,11 @@ public class XyzHubActionMatrix extends ActionMatrix {
 
   public XyzHubActionMatrix accessConnectors(final AttributeMap attributesMap) throws NullPointerException {
     addAction(ACCESS_CONNECTORS, attributesMap);
+    return this;
+  }
+
+  public XyzHubActionMatrix manageConnectors(final AttributeMap attributesMap) throws NullPointerException {
+    addAction(MANAGE_CONNECTORS, attributesMap);
     return this;
   }
 

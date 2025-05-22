@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2020 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,30 +22,50 @@ package com.here.xyz.hub.rest.admin;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.here.xyz.hub.Service;
+import com.here.xyz.hub.rest.admin.messages.brokers.RedisMessageBroker;
 import com.here.xyz.hub.rest.health.HealthApi;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.hub.util.health.Config;
+import com.here.xyz.hub.util.health.schema.Response;
+import com.here.xyz.util.service.Core;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
+import io.vertx.core.net.impl.ConnectionBase;
 import io.vertx.ext.web.client.HttpResponse;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.TimeUnit;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * A Node represents one running Service Node of the XYZ Hub Service.
  */
-public class Node implements Logging {
+public class Node {
+
+  private static final int HEALTH_TIMEOUT = 25;
+  private static final Logger logger = LogManager.getLogger();
+
+  private static int nodeCount = Service.configuration.INSTANCE_COUNT;
+  private static final int NODE_COUNT_FETCH_PERIOD = 30_000; //ms
+  private static final int CLUSTER_NODES_CHECKER_PERIOD = 120_000; //ms
+  private static final int CLUSTER_NODES_PING_PERIOD = 600_000; //ms
+  private static final int MAX_HC_FAILURE_COUNT = 3;
 
   public static final Node OWN_INSTANCE = new Node(Service.HOST_ID, Service.getHostname(),
-      Service.configuration != null ? Service.configuration.ADMIN_MESSAGE_PORT : -1);
+      Service.configuration != null ? Service.getPublicPort() : -1);
+  private static final Set<Node> otherClusterNodes = new CopyOnWriteArraySet<>();
   private static final int DEFAULT_PORT = 80;
   private static final String UNKNOWN_ID = "UNKNOWN";
   public String id;
   public String ip;
   public int port;
+  public int consecutiveHcFailures;
   @JsonIgnore
   private URL url;
 
@@ -53,6 +73,44 @@ public class Node implements Logging {
     this.id = id;
     this.ip = ip;
     this.port = port;
+  }
+
+  public static void initialize() {
+    startNodeInfoBroadcast();
+    initNodeCountFetcher();
+    initNodeChecker();
+  }
+
+  private static void startNodeInfoBroadcast() {
+    new NodeInfoNotification().broadcast();
+    if (Core.vertx != null) Core.vertx.setPeriodic(CLUSTER_NODES_PING_PERIOD, timerId -> new NodeInfoNotification().broadcast());
+  }
+
+  private static void initNodeCountFetcher() {
+    if (Core.vertx != null) {
+      Core.vertx.setPeriodic(NODE_COUNT_FETCH_PERIOD, timerId -> RedisMessageBroker.getInstance().onComplete(ar -> ar.result().fetchSubscriberCount(r -> {
+        if (r.succeeded()) {
+          nodeCount = r.result();
+          logger.debug("Service node-count: " + nodeCount);
+        }
+        else
+          logger.warn("Checking service node-count failed.", r.cause());
+      })));
+    }
+  }
+
+  private static void initNodeChecker() {
+    if (Core.vertx != null) {
+      Core.vertx.setPeriodic(CLUSTER_NODES_CHECKER_PERIOD, timerId -> otherClusterNodes.forEach(otherNode -> otherNode.isHealthy(ar -> {
+        if (ar.failed()) {
+          otherNode.consecutiveHcFailures++;
+          if (otherNode.consecutiveHcFailures >= MAX_HC_FAILURE_COUNT)
+            otherClusterNodes.remove(otherNode);
+        }
+        else
+          otherNode.consecutiveHcFailures = 0;
+      })));
+    }
   }
 
   public static Node forIpAndPort(String ip, int port) {
@@ -68,29 +126,46 @@ public class Node implements Logging {
   }
 
   private void callHealthCheck(boolean onlyAliveCheck, Handler<AsyncResult<Void>> callback) {
-    Service.webClient.get(getUrl().getPort() == -1 ? DEFAULT_PORT : getUrl().getPort(), url.getHost(), HealthApi.MAIN_HEALTCHECK_ENDPOINT)
-        .timeout(TimeUnit.SECONDS.toMillis(5))
-        .send(ar -> {
-          if (ar.succeeded()) {
-            HttpResponse<Buffer> response = ar.result();
-            if (onlyAliveCheck || response.statusCode() == 200) {
-              callback.handle(Future.succeededFuture());
+    try {
+      Service.webClient.get(port, ip, HealthApi.MAIN_HEALTCHECK_ENDPOINT)
+          .timeout(TimeUnit.SECONDS.toMillis(HEALTH_TIMEOUT))
+          .putHeader(Config.getHealthCheckHeaderName(), Config.getHealthCheckHeaderValue())
+          .send(ar -> {
+            if (ar.succeeded()) {
+              HttpResponse<Buffer> response = ar.result();
+              if (onlyAliveCheck || response.statusCode() == 200) {
+                Response r = response.bodyAsJson(Response.class);
+                if (id.equals(r.getNode()))
+                  callback.handle(Future.succeededFuture());
+                else
+                  callback.handle(Future.failedFuture("Node with ID " + id + " and IP " + ip + " is not existing anymore. "
+                      + "IP is now used by node with ID " + r.getNode()));
+              }
+              else {
+                callback.handle(Future.failedFuture("Node with ID " + id + " and IP " + ip + " is not healthy."));
+              }
             }
-            else
-              callback.handle(Future.failedFuture("Node with ID " + id + " and IP " + ip + " is not healthy."));
-          }
-          else {
-            callback.handle(Future.failedFuture("Node with ID " + id + " and IP " + ip + " is not reachable."));
-          }
-        });
+            else {
+              callback.handle(Future.failedFuture("Node with ID " + id + " and IP " + ip + " is not reachable."));
+            }
+          });
+    }
+    catch (RuntimeException e) {
+      if (e == ConnectionBase.CLOSED_EXCEPTION) {
+        e = new RuntimeException("Connection was already closed.", e);
+        logger.warn("Error calling health-check of other service node.", e);
+      }
+      callback.handle(Future.failedFuture(e));
+    }
   }
 
   @JsonIgnore
   public URL getUrl() {
     try {
       url = new URL("http", ip, port, "");
-    } catch (MalformedURLException e) {
-      logger().error("Unable to create the URL for the local node.", e);
+    }
+    catch (MalformedURLException e) {
+      logger.error("Unable to create the URL for the node with id " + id + ".", e);
     }
     return url;
   }
@@ -110,5 +185,31 @@ public class Node implements Logging {
   @Override
   public int hashCode() {
     return Objects.hash(id);
+  }
+
+  public static int count() {
+    return Math.max(nodeCount, 1);
+  }
+
+  public static Set<Node> getClusterNodes() {
+    Set<Node> clusterNodes = new HashSet<>(otherClusterNodes);
+    clusterNodes.add(OWN_INSTANCE);
+    return clusterNodes;
+  }
+
+  private static class NodeInfoNotification extends AdminMessage {
+
+    public boolean isResponse = false;
+
+    @Override
+    protected void handle() {
+      otherClusterNodes.add(source);
+      if (!isResponse) {
+        NodeInfoNotification response = new NodeInfoNotification();
+        response.isResponse = true;
+        //Send a notification back to the sender
+        response.send(source);
+      }
+    }
   }
 }

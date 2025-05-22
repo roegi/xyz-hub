@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,50 +19,45 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static io.vertx.core.http.HttpHeaders.ACCEPT;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
-import com.here.xyz.hub.rest.ApiParam.Path;
+import com.here.xyz.hub.Service;
 import com.here.xyz.hub.rest.ApiParam.Query;
-import com.here.xyz.hub.task.FeatureTaskHandler.InvalidStorageException;
-import com.here.xyz.hub.task.ModifyOp.IfExists;
-import com.here.xyz.hub.task.ModifyOp.IfNotExists;
 import com.here.xyz.hub.task.ModifySpaceOp;
 import com.here.xyz.hub.task.SpaceTask.ConditionalOperation;
+import com.here.xyz.hub.task.SpaceTask.ConnectorMapping;
 import com.here.xyz.hub.task.SpaceTask.MatrixReadQuery;
-import com.here.xyz.hub.task.Task;
+import com.here.xyz.models.hub.FeatureModificationList.IfExists;
+import com.here.xyz.models.hub.FeatureModificationList.IfNotExists;
 import com.here.xyz.models.hub.Space.Copyright;
-import com.here.xyz.responses.ErrorResponse;
+import com.here.xyz.util.service.errors.DetailedHttpException;
 import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.api.contract.openapi3.OpenAPI3RouterFactory;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
-public class SpaceApi extends Api {
+public class SpaceApi extends SpaceBasedApi {
 
-  public SpaceApi(OpenAPI3RouterFactory routerFactory) {
-    routerFactory.addHandlerByOperationId("getSpace", this::getSpace);
-    routerFactory.addHandlerByOperationId("getSpaces", this::getSpaces);
-    routerFactory.addHandlerByOperationId("postSpace", this::postSpace);
-    routerFactory.addHandlerByOperationId("patchSpace", this::patchSpace);
-    routerFactory.addHandlerByOperationId("deleteSpace", this::deleteSpace);
+  public SpaceApi(RouterBuilder rb) {
+    rb.getRoute("getSpace").setDoValidation(false).addHandler(this::getSpace);
+    rb.getRoute("getSpaces").setDoValidation(false).addHandler(this::getSpaces);
+    rb.getRoute("postSpace").setDoValidation(false).addHandler(this::postSpace);
+    rb.getRoute("patchSpace").setDoValidation(false).addHandler(this::patchSpace);
+    rb.getRoute("deleteSpace").setDoValidation(false).addHandler(this::deleteSpace);
   }
 
   /**
    * Read a space.
    */
   public void getSpace(final RoutingContext context) {
-    JsonObject input = new JsonObject().put("id", context.pathParam(ApiParam.Path.SPACE_ID));
-    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input), IfNotExists.ERROR, IfExists.RETAIN, true);
-
-    new ConditionalOperation(context, ApiResponseType.SPACE, modifyOp, true)
-        .execute(this::sendResponse, this::sendErrorResponse);
+    new MatrixReadQuery(context, getSpaceId(context)).execute(this::sendResponse, this::sendErrorResponse);
   }
 
   /**
@@ -73,8 +68,11 @@ public class SpaceApi extends Api {
         context,
         ApiResponseType.SPACE_LIST,
         ApiParam.Query.getBoolean(context, ApiParam.Query.INCLUDE_RIGHTS, false),
-        ApiParam.Query.getBoolean(context, Query.INCLUDE_CONNECTORS, false),
-        ApiParam.Query.getString(context, ApiParam.Query.OWNER, MatrixReadQuery.ME)
+        ApiParam.Query.getBoolean(context, ApiParam.Query.INCLUDE_CONNECTORS, false),
+        ApiParam.Query.getString(context, ApiParam.Query.OWNER, MatrixReadQuery.ME),
+        ApiParam.Query.getSpacePropertiesQuery(context, ApiParam.Query.CONTENT_UPDATED_AT),
+        ApiParam.Query.getString(context, ApiParam.Query.TAG, null),
+        ApiParam.Query.getString(context, Query.REGION, null)
     ).execute(this::sendResponse, this::sendErrorResponse);
   }
 
@@ -84,16 +82,20 @@ public class SpaceApi extends Api {
   public void postSpace(final RoutingContext context) {
     JsonObject input;
     try {
-      input = context.getBodyAsJson();
-    } catch (DecodeException e) {
-      context.fail(new HttpException(BAD_REQUEST, "Invalid JSON string"));
+      input = context.body().asJsonObject();
+    }
+    catch (DecodeException e) {
+      context.fail(new DetailedHttpException("E318400", e));
       return;
     }
-    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input), IfNotExists.CREATE, IfExists.ERROR,
-        true);
+
+    ConnectorMapping defaultConnectorMapping = Service.configuration.DEFAULT_CONNECTOR_MAPPING_STRATEGY;
+    ConnectorMapping connectorMapping = ConnectorMapping.of(ApiParam.Query.getString(context, Query.CONNECTOR_MAPPING, defaultConnectorMapping.name()), defaultConnectorMapping);
+    boolean dryRun = ApiParam.Query.getBoolean(context, Query.DRY_RUN, false);
+    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input.getMap()), IfNotExists.CREATE, IfExists.ERROR, true, connectorMapping, dryRun);
 
     new ConditionalOperation(context, ApiResponseType.SPACE, modifyOp, false)
-        .execute(this::sendResponse, this::sendErrorResponseOnEdit);
+        .execute(this::sendResponse, this::sendErrorResponse);
   }
 
   /**
@@ -102,35 +104,37 @@ public class SpaceApi extends Api {
   public void patchSpace(final RoutingContext context) {
     JsonObject input;
     try {
-      input = context.getBodyAsJson();
+      input = context.body().asJsonObject();
     } catch (DecodeException e) {
-      context.fail(new HttpException(BAD_REQUEST, "Invalid JSON string"));
+      context.fail(new DetailedHttpException("E318400", e));
       return;
     }
-    String pathId = context.pathParam(Path.SPACE_ID);
+    String spaceId = getSpaceId(context);
 
     if (input.getString("id") == null) {
-      input.put("id", pathId);
+      input.put("id", spaceId);
     }
-    if (!input.getString("id").equals(pathId)) {
-      context.fail(
-          new HttpException(BAD_REQUEST, "The space ID in the body does not match the ID in the resource path."));
+    if (!input.getString("id").equals(spaceId)) {
+      context.fail(new DetailedHttpException("E318402"));
       return;
     }
 
-    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input), IfNotExists.ERROR, IfExists.PATCH, true);
+    boolean dryRun = ApiParam.Query.getBoolean(context, Query.DRY_RUN, false);
+    boolean forceStorage = ApiParam.Query.getBoolean(context, Query.FORCE_STORAGE, false);
+
+    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input.getMap()), IfNotExists.ERROR, IfExists.PATCH, true, dryRun, forceStorage);
 
     new ConditionalOperation(context, ApiResponseType.SPACE, modifyOp, true)
-        .execute(this::sendResponse, this::sendErrorResponseOnEdit);
-
+        .execute(this::sendResponse, this::sendErrorResponse);
   }
 
   /**
    * Delete a space.
    */
   public void deleteSpace(final RoutingContext context) {
-    JsonObject input = new JsonObject().put("id", context.pathParam(Path.SPACE_ID));
-    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input), IfNotExists.ERROR, IfExists.DELETE, true);
+    Map<String,Object> input = new JsonObject().put("id", getSpaceId(context)).getMap();
+    boolean dryRun = ApiParam.Query.getBoolean(context, Query.DRY_RUN, false);
+    ModifySpaceOp modifyOp = new ModifySpaceOp(Collections.singletonList(input), IfNotExists.ERROR, IfExists.DELETE, true, dryRun);
 
     //Delete the space
     ApiResponseType responseType = APPLICATION_JSON.equals(context.request().getHeader(ACCEPT))
@@ -139,22 +143,9 @@ public class SpaceApi extends Api {
         .execute(this::sendResponse, this::sendErrorResponse);
   }
 
-  /**
-   * Send an error response to the client when an exception occurred while processing a task.
-   *
-   * @param task the task for which to return an error response.
-   * @param e the exception that should be used to generate an {@link ErrorResponse}, if null an internal server error is returned.
-   */
-  public void sendErrorResponseOnEdit(final Task task, final Exception e) {
-    if (e instanceof InvalidStorageException) {
-      sendErrorResponse(task.context, new HttpException(BAD_REQUEST, "The space contains an invalid storage ID."));
-    } else {
-      sendErrorResponse(task.context, e);
-    }
-  }
-
   @JsonIgnoreProperties(ignoreUnknown = true)
   public static class BasicSpaceView {
+
     public String id;
     public String owner;
     public String title;

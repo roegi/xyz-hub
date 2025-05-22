@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,15 +31,22 @@ import java.util.List;
  * The response that is sent for a {@link GetStatisticsEvent}.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
+@JsonInclude(Include.NON_DEFAULT)
 @JsonTypeName(value = "StatisticsResponse")
 public class StatisticsResponse extends XyzResponse<StatisticsResponse> {
 
   private Value<Long> count;
+  private Value<Long> contentUpdatedAt;
+  @Deprecated
   private Value<Long> byteSize;
+  private Value<Long> dataSize;
   private Value<BBox> bbox;
   private PropertiesStatistics properties;
   private Value<List<PropertyStatistics>> tags;
   private Value<List<String>> geometryTypes;
+  private Value<Long> minVersion;
+  private Value<Long> maxVersion;
+  private Value<Long> minTagVersion;
 
   /**
    * Returns the amount of features stored in the space.
@@ -73,9 +80,41 @@ public class StatisticsResponse extends XyzResponse<StatisticsResponse> {
   }
 
   /**
+   * Returns the time when the content in the space was last updated.
+   *
+   * @return the time when the content in the space was last updated.
+   */
+  @SuppressWarnings("unused")
+  public Value<Long> getContentUpdatedAt() {
+    return this.contentUpdatedAt;
+  }
+
+  /**
+   * Sets the time when the content in the space was last updated.
+   *
+   * @param contentUpdatedAt the time when the content in the space was last updated.
+   */
+  @SuppressWarnings({"unused", "WeakerAccess"})
+  public void setContentUpdatedAt(Value<Long> contentUpdatedAt) {
+    this.contentUpdatedAt = contentUpdatedAt;
+  }
+
+  /**
+   * Sets the time when the content in the space was last updated.
+   *
+   * @return this.
+   */
+  @SuppressWarnings("unused")
+  public StatisticsResponse withContentUpdatedAt(Value<Long> contentUpdatedAt) {
+    setContentUpdatedAt(contentUpdatedAt);
+    return this;
+  }
+
+  /**
    * Returns the amount of bytes that are stored in the space.
    *
    * @return the amount of bytes that are stored in the space.
+   * @deprecated use {@link #getDataSize()} instead.
    */
   @SuppressWarnings({"unused"})
   public Value<Long> getByteSize() {
@@ -86,6 +125,7 @@ public class StatisticsResponse extends XyzResponse<StatisticsResponse> {
    * Sets the amount of bytes that are stored in the space.
    *
    * @param byteSize the amount of bytes that are stored in the space.
+   * @deprecated use {@link #setDataSize(Value)} instead.
    */
   @SuppressWarnings({"WeakerAccess"})
   public void setByteSize(Value<Long> byteSize) {
@@ -96,10 +136,42 @@ public class StatisticsResponse extends XyzResponse<StatisticsResponse> {
    * Sets the amount of bytes that are stored in the space.
    *
    * @return this.
+   * @deprecated use {@link #withDataSize(Value)} instead.
    */
   @SuppressWarnings({"unused"})
   public StatisticsResponse withByteSize(Value<Long> byteSize) {
     setByteSize(byteSize);
+    return this;
+  }
+
+  /**
+   * Returns the amount of bytes that are stored in the space.
+   *
+   * @return the amount of bytes that are stored in the space.
+   */
+  @SuppressWarnings({"unused"})
+  public Value<Long> getDataSize() {
+    return this.dataSize;
+  }
+
+  /**
+   * Sets the amount of bytes that are stored in the space.
+   *
+   * @param dataSize the amount of bytes that are stored in the space.
+   */
+  @SuppressWarnings({"WeakerAccess"})
+  public void setDataSize(Value<Long> dataSize) {
+    this.dataSize = dataSize;
+  }
+
+  /**
+   * Sets the amount of bytes that are stored in the space.
+   *
+   * @return this.
+   */
+  @SuppressWarnings({"unused"})
+  public StatisticsResponse withDataSize(Value<Long> dataSize) {
+    setDataSize(dataSize);
     return this;
   }
 
@@ -177,10 +249,55 @@ public class StatisticsResponse extends XyzResponse<StatisticsResponse> {
     return this;
   }
 
+  public Value<Long> getMinVersion() {
+    return minVersion;
+  }
+
+  public void setMinVersion(Value<Long> minVersion) {
+    this.minVersion = minVersion;
+  }
+
+  public StatisticsResponse withMinVersion(Value<Long> minVersion) {
+    setMinVersion(minVersion);
+    return this;
+  }
+
+  public Value<Long> getMaxVersion() {
+    return maxVersion;
+  }
+
+  public void setMaxVersion(Value<Long> maxVersion) {
+    this.maxVersion = maxVersion;
+  }
+
+  public StatisticsResponse withMaxVersion(Value<Long> maxVersion) {
+    setMaxVersion(maxVersion);
+    return this;
+  }
+
+  public Value<Long> getMinTagVersion() {
+    return minTagVersion;
+  }
+
+  public void setMinTagVersion(Value<Long> minTagVersion) {
+    this.minTagVersion = minTagVersion;
+  }
+
+  public StatisticsResponse withMinTagVersion(Value<Long> minTagVersion) {
+    setMinTagVersion(minTagVersion);
+    return this;
+  }
+
   public static class Value<T> {
 
     T value;
     Boolean estimated;
+
+    public Value() {};
+
+    public Value(T value) {
+      this.value = value;
+    }
 
     public T getValue() {
       return this.value;

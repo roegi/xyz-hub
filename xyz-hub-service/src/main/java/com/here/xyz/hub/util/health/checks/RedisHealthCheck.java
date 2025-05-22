@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2020 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,20 +26,19 @@ import static com.here.xyz.hub.util.health.schema.Status.Result.UNKNOWN;
 import com.here.xyz.hub.cache.RedisCacheClient;
 import com.here.xyz.hub.util.health.schema.Response;
 import com.here.xyz.hub.util.health.schema.Status;
+import java.util.Arrays;
 
 
 public class RedisHealthCheck extends ExecutableCheck {
 
 	private static final String HC_CACHE_KEY = "__SAMPLE_HEALTH_CHECK_KEY";
-	private static final String HC_CACHE_VALUE = "someValue";
-	private String host;
-	private int port;
+	private static final byte[] HC_CACHE_VALUE = "someValue".getBytes();
+	private final String uri;
 	private RedisCacheClient client;
-	private volatile String lastReceivedValue;
+	private volatile byte[] lastReceivedValue;
 
-	public RedisHealthCheck(String host, int port) {
-		this.host = host;
-		this.port = port;
+	public RedisHealthCheck(String uri) {
+		this.uri = uri;
 		setName("Redis");
 		setRole(Role.CACHE);
 		setTarget(Target.REMOTE);
@@ -49,15 +48,15 @@ public class RedisHealthCheck extends ExecutableCheck {
 	public Status execute() {
 		Status s = new Status();
 		Response r = new Response();
-		r.setNode(host + ":" + port);
-		if (host == null) {
-			setResponse(r.withMessage("No Redis host given."));
+		r.setNode(uri);
+		if (uri == null) {
+			setResponse(r.withMessage("No Redis URI given."));
 			return s.withResult(UNKNOWN);
 		}
 
 		try {
 			if (client == null) {
-				client = new RedisCacheClient();
+				client = (RedisCacheClient) RedisCacheClient.getInstance();
 			}
 		}
 		catch (Throwable t) {
@@ -71,14 +70,13 @@ public class RedisHealthCheck extends ExecutableCheck {
 		}
 		catch (Throwable t) {
       setResponse(r.withMessage("Error when trying to set the sample health check record."));
-			resetClient();
 			return s.withResult(ERROR);
 		}
 
 		//Try getting the value back
 		lastReceivedValue = null;
 		try {
-			client.get(HC_CACHE_KEY, result -> {
+			client.get(HC_CACHE_KEY).onSuccess(result -> {
 				lastReceivedValue = result;
 				synchronized (this) {
 					this.notify();
@@ -87,7 +85,6 @@ public class RedisHealthCheck extends ExecutableCheck {
 		}
 		catch (Throwable t) {
       setResponse(r.withMessage("Error when trying to get the sample health check record back."));
-			resetClient();
 			return s.withResult(ERROR);
 		}
 		try {
@@ -95,24 +92,13 @@ public class RedisHealthCheck extends ExecutableCheck {
 				this.wait(timeout);
 			}
 		} catch (InterruptedException e) {
-			resetClient();
 			return s.withResult(UNKNOWN);
 		}
-		if (HC_CACHE_VALUE.equals(lastReceivedValue)) {
+		if (Arrays.equals(HC_CACHE_VALUE, lastReceivedValue)) {
 			setResponse(null);
 			return s.withResult(OK);
 		}
 		setResponse(r.withMessage("Wasn't able to retrieve the sample health check record back correctly."));
-		resetClient();
 		return s.withResult(CRITICAL);
 	}
-
-	/**
-	 * Resets the client when it might be that the connection needs to be re-established
-	 */
-	private void resetClient() {
-		client.shutdown();
-		client = null;
-	}
-
 }

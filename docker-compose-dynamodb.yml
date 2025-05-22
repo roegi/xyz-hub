@@ -1,0 +1,121 @@
+version: "3"
+services:
+    xyz-hub:
+        image: "xyz-hub"
+        build:
+            context: ./
+            dockerfile: ./xyz-util/src/main/resources/docker/Dockerfile
+        container_name: "xyz-hub"
+        ports:
+            - "8080:8080"
+        depends_on:
+            - "dynamodb"
+            - "postgres"
+            - "redis"
+            - "xyz-http-connector"
+            - "aws-localstack"
+        environment:
+            - SPACES_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-spaces
+            - CONNECTORS_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-connectors
+            - PACKAGES_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-packages
+            - SUBSCRIPTIONS_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-subscriptions
+            - TAGS_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-tags
+            - SETTINGS_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-settings
+    xyz-http-connector:
+        image: "xyz-hub"
+        build:
+            context: ./
+            dockerfile: ./xyz-util/src/main/resources/docker/Dockerfile
+        container_name: xyz-http-connector
+        ports:
+            - "9090:9090"
+        environment:
+            - LOCALSTACK_ENDPOINT=http://localstack:4566
+            - JOBS_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-hub-local-jobs
+        depends_on:
+            - "dynamodb"
+            - "postgres"
+            - "aws-localstack"
+        command: java -cp xyz-hub-service.jar com.here.xyz.httpconnector.CService
+    xyz-job-service:
+        image: "xyz-job"
+        build:
+            context: ./
+            dockerfile: ./xyz-util/src/main/resources/docker/Dockerfile-job-service
+        container_name: xyz-job-service
+        ports:
+            - "7070:7070"
+        environment:
+            - HUB_ENDPOINT=http://xyz-hub:8080/hub
+            - LOCALSTACK_ENDPOINT=http://localstack:4566
+            - JOBS_DYNAMODB_TABLE_ARN=arn:aws:dynamodb:dynamodb:000000008000:table/xyz-jobs-local
+        depends_on:
+            - "xyz-hub"
+            - "dynamodb"
+            - "postgres"
+            - "aws-localstack"
+        command: java -cp xyz-job-service-fat.jar com.here.xyz.jobs.service.JobService
+    postgres:
+        image: "xyz-postgres"
+        build:
+            context: ./
+            dockerfile: ./xyz-util/src/main/resources/docker/Dockerfile-postgres
+        container_name: "postgres"
+        ports:
+            - "5432:5432"
+    redis:
+        image: "redis"
+        container_name: "redis"
+        ports:
+            - "6379:6379"
+    dynamodb:
+        image: "amazon/dynamodb-local"
+        container_name: "dynamodb"
+        ports:
+            - "8000:8000"
+        command: ["-jar", "DynamoDBLocal.jar", "-sharedDb"]
+    dynamodb-admin:
+        image: aaronshaf/dynamodb-admin
+        container_name: "dynamodb-admin"
+        ports:
+            - "8001:8001"
+        environment:
+            - DYNAMO_ENDPOINT=http://dynamodb:8000
+    swagger-ui:
+        image: "swaggerapi/swagger-ui"
+        container_name: "swagger-ui"
+        ports:
+            - "8081:8080"
+            - "8888:8080"
+        environment:
+            - QUERY_CONFIG_ENABLED=true
+            - SWAGGER_JSON_URL=http://localhost:8080/hub/static/openapi/stable.yaml
+    aws-localstack:
+        image: "localstack/localstack:3.5.0"
+        container_name: "localstack-main"
+        hostname: localstack
+        ports:
+            - "4563-4599:4563-4599"
+        extra_hosts:
+            - host.docker.internal:host-gateway
+        environment:
+            - PERSISTENCE=0
+            - DEBUG=1
+            - AWS_ACCESS_KEY_ID=localstack
+            - AWS_SECRET_ACCESS_KEY=localstack
+            - AWS_DEFAULT_REGION=eu-west-1
+            - EXTRA_CORS_ALLOWED_ORIGINS=http://localhost:5001
+            - LAMBDA_DOCKER_FLAGS=--add-host host.docker.internal:host-gateway
+        volumes:
+            - "/var/run/docker.sock:/var/run/docker.sock"
+            - "./xyz-hub-test/src/test/resources/mock-servers/localstack/docker-entrypoint-initaws.d/01-create-bucket.sh:/etc/localstack/init/ready.d/init-aws.sh"
+            - "./xyz-jobs/xyz-job-steps/src/main/bash:/home/localstack/job-steps-scripts"
+            - "./xyz-jobs/xyz-job-steps:/home/localstack/job-steps"
+    s3-explorer:
+        image: aws-js-s3-explorer
+        build:
+            context: ./
+            dockerfile: ./xyz-util/src/main/resources/docker/Dockerfile-s3-explorer
+        container_name: s3-explorer
+        ports:
+            - "5001:8080"

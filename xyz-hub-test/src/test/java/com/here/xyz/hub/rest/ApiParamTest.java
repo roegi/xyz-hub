@@ -28,13 +28,13 @@ import com.here.xyz.events.PropertyQueryList;
 import com.here.xyz.hub.rest.ApiParam.Query;
 import org.junit.Test;
 
-
 public class ApiParamTest {
 
+  @SuppressWarnings("OptionalGetWithoutIsPresent")
   @Test
   public void parsePropertiesQuery() {
     String URIquery = "a=1&b=2&p.a=3&p.b>4.1&p.boolean=true&f.createdAt>0&p.testString=string,\"5\"";
-    PropertiesQuery pq = Query.parsePropertiesQuery(URIquery);
+    PropertiesQuery pq = PropertiesQuery.fromString(URIquery, "", false);
     assertEquals("1 OR block is expected", 1, pq.size());
 
     PropertyQueryList pql = pq.get(0);
@@ -69,5 +69,83 @@ public class ApiParamTest {
     assertEquals(2, query.getValues().size());
     assertEquals("string", query.getValues().get(0));
     assertEquals("5", query.getValues().get(1));
+
+  }
+
+  @Test
+  public void parsePropertiesQuerySpace() {
+    // equals
+    String URISpaceQuery = "a=1&b=2&contentUpatedAt=3";
+    PropertiesQuery pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    assertEquals("1 OR block is expected", 1, pq.size());
+
+    PropertyQueryList pql = pq.get(0);
+    assertEquals("1 AND blocks are expected.", 1, pql.size());
+
+    PropertyQuery query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.EQUALS, query.getOperation());
+    assertEquals(1, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
+
+    // equals with OR
+    URISpaceQuery = "a=1&b=2&contentUpatedAt=3,4";
+    pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    pql = pq.get(0);
+
+    query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.EQUALS, query.getOperation());
+    assertEquals(2, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
+    assertEquals(4L, query.getValues().get(1));
+
+    // not equals
+    URISpaceQuery = "a=1&b=2&contentUpatedAt!=3";
+    pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    pql = pq.get(0);
+
+    query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.NOT_EQUALS, query.getOperation());
+    assertEquals(1, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
+
+    // greater
+    URISpaceQuery = "a=1&b=2&contentUpatedAt>3";
+    pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    pql = pq.get(0);
+
+    query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.GREATER_THAN, query.getOperation());
+    assertEquals(1, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
+
+    // greater equals
+    URISpaceQuery = "a=1&b=2&contentUpatedAt>=3";
+    pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    pql = pq.get(0);
+
+    query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.GREATER_THAN_OR_EQUALS, query.getOperation());
+    assertEquals(1, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
+
+    // less
+    URISpaceQuery = "a=1&b=2&contentUpatedAt<3";
+    pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    pql = pq.get(0);
+
+    query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.LESS_THAN, query.getOperation());
+    assertEquals(1, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
+
+    // less equals
+    URISpaceQuery = "a=1&b=2&contentUpatedAt<=3";
+    pq = PropertiesQuery.fromString(URISpaceQuery, "contentUpatedAt", true);
+    pql = pq.get(0);
+
+    query = pql.stream().filter(q -> q.getKey().equals("contentUpatedAt")).findFirst().get();
+    assertEquals(QueryOperation.LESS_THAN_OR_EQUALS, query.getOperation());
+    assertEquals(1, query.getValues().size());
+    assertEquals(3L, query.getValues().get(0));
   }
 }

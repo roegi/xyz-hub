@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,16 +45,15 @@ import java.util.Map;
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeName(value = "ModifyFeaturesEvent")
-public final class ModifyFeaturesEvent extends Event<ModifyFeaturesEvent> {
+public final class ModifyFeaturesEvent extends ContextAwareEvent<ModifyFeaturesEvent> {
 
   private List<Feature> insertFeatures;
   private List<Feature> updateFeatures;
   private List<Feature> upsertFeatures;
   @JsonInclude(Include.ALWAYS)
   private Map<String, String> deleteFeatures;
-  private Boolean transaction;
-  private Boolean enableHistory;
-  private Boolean enableUUID;
+  private boolean transaction;
+  private boolean conflictDetectionEnabled;
   private List<ModificationFailure> failed;
 
   /**
@@ -148,7 +147,7 @@ public final class ModifyFeaturesEvent extends Event<ModifyFeaturesEvent> {
    * @return true if the store event should be transactional, therefore either fully succeed or fully fail.
    */
   @SuppressWarnings("unused")
-  public Boolean getTransaction() {
+  public boolean getTransaction() {
     return this.transaction;
   }
 
@@ -158,65 +157,36 @@ public final class ModifyFeaturesEvent extends Event<ModifyFeaturesEvent> {
    * @param transaction if true, then the store event should be transactional, therefore either fully succeed or fully fail.
    */
   @SuppressWarnings("WeakerAccess")
-  public void setTransaction(Boolean transaction) {
+  public void setTransaction(boolean transaction) {
     this.transaction = transaction;
   }
 
   @SuppressWarnings("unused")
-  public ModifyFeaturesEvent withTransaction(Boolean transaction) {
+  public ModifyFeaturesEvent withTransaction(boolean transaction) {
     setTransaction(transaction);
     return this;
   }
 
   /**
-   * Returns true if the history should be maintained.
-   *
-   * @return true if the history should be maintained, false otherwise.
+   * @return Whether conflict detection should be enabled for this modification.
    */
-  @SuppressWarnings("unused")
-  public Boolean getEnableHistory() {
-    return this.enableHistory;
+  public boolean isConflictDetectionEnabled() {
+    return conflictDetectionEnabled;
   }
 
   /**
-   * Sets the history.
-   *
-   * @param enableHistory if true, then the store history.
+   * @param conflictDetectionEnabled whether conflict detection should be enabled for this modification.
    */
-  @SuppressWarnings("WeakerAccess")
-  public void setEnableHistory(Boolean enableHistory) {
-    this.enableHistory = enableHistory;
-  }
-
-  @SuppressWarnings("unused")
-  public ModifyFeaturesEvent withEnableHistory(Boolean enableHistory) {
-    setEnableHistory(enableHistory);
-    return this;
+  public void setConflictDetectionEnabled(boolean conflictDetectionEnabled) {
+    this.conflictDetectionEnabled = conflictDetectionEnabled;
   }
 
   /**
-   * Returns true if the hash should be maintained.
-   *
-   * @return true if the hash should be maintained, false otherwise.
+   * @param conflictDetectionEnabled whether conflict detection should be enabled for this modification.
+   * @return this event object for chaining.
    */
-  @SuppressWarnings("unused")
-  public Boolean getEnableUUID() {
-    return this.enableUUID;
-  }
-
-  /**
-   * Sets the enabler for uuid.
-   *
-   * @param enableUUID if true, then set an uuid for each feature state
-   */
-  @SuppressWarnings("WeakerAccess")
-  public void setEnableUUID(Boolean enableUUID) {
-    this.enableUUID = enableUUID;
-  }
-
-  @SuppressWarnings("unused")
-  public ModifyFeaturesEvent withEnableUUID(Boolean enableUUID) {
-    setEnableUUID(enableUUID);
+  public ModifyFeaturesEvent withConflictDetectionEnabled(boolean conflictDetectionEnabled) {
+    setConflictDetectionEnabled(conflictDetectionEnabled);
     return this;
   }
 

@@ -2,29 +2,231 @@
   {
     "id": "psql",
     "params": {
-      "propertySearch": true
+      "autoIndexing": true,
+      "propertySearch": true,
+      "onDemandIdxLimit": 8,
+      "dbCheckoutTimeout": 12,
+      "dbAcquireRetryAttempts": 10,
+      "connectorId" : "psql",
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"${PSQL_DB}\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\"})",
+      "mvtSupport": true
     },
     "capabilities": {
       "propertySearch": true,
       "searchablePropertiesConfiguration": true,
       "preserializedResponseSupport": true,
       "enableAutoCache": true,
+      "maxPayloadSize": 1073741824,
+      "storageUtilizationReporting": true,
       "clusteringTypes": [
-        "hexbin"
-      ]
+        "hexbin", "quadbin"
+      ],
+      "mvtSupport": true,
+      "extensionSupport": true
     },
     "connectionSettings": {
       "maxConnections": 32
     },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-psql-local",
-      "warmUp": 1,
-      "className": "com.here.xyz.psql.PSQLXyzConnector",
-      "env": {
-        "PSQL_HOST": "${PSQL_HOST}",
-        "PSQL_USER": "postgres",
-        "PSQL_PASSWORD": "password"
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-psql-local",
+        "warmUp": 1,
+        "className": "com.here.xyz.psql.PSQLXyzConnector",
+        "env": {
+          "ECPS_PHRASE": "local"
+        },
+        "protocolVersion": "0.7.0"
+      }
+    },
+    "trusted": true,
+    "forwardParamsConfig": {
+      "cookies": ["here_access", "here_access_st"],
+      "headers": ["AuthorizatioN", "realm"],
+      "queryParams": ["apiKey"]
+    }
+  },
+  {
+    "id": "psql-http",
+    "capabilities": {
+      "clusteringTypes": [
+        "hexbin",
+        "quadbin"
+      ],
+      "enableAutoCache": true,
+      "maxPayloadSize": 2147483647,
+      "maxUncompressedSize": 1,
+      "preserializedResponseSupport": true,
+      "propertySearch": true,
+      "relocationSupport": false,
+      "searchablePropertiesConfiguration": true,
+      "mvtSupport": true
+    },
+    "connectionSettings": {
+      "maxConnections": 1024,
+      "minConnections": 0
+    },
+    "defaultEventTypes": null,
+    "params": {
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"${PSQL_DB}\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\",\"PSQL_MAX_CONN\":1024})",
+      "autoIndexing": true,
+      "propertySearch": true,
+      "mvtSupport": true
+    },
+    "remoteFunctions": {
+      "local": {
+        "id": "psql-http",
+        "type": "Http",
+        "url": "http://dummy",
+        "protocolVersion": "0.7.0",
+        "metricsActive": true
+      }
+    },
+    "trusted": true
+  },
+  {
+    "id": "psql_db2_hashed",
+    "params": {
+      "autoIndexing": true,
+      "propertySearch": true,
+      "onDemandIdxLimit": 8,
+      "dbCheckoutTimeout": 12,
+      "dbAcquireRetryAttempts": 10,
+      "connectorId" : "psql_db2_hashed",
+      "enableHashedSpaceId" : true,
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"postgres_db2\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\"})",
+      "mvtSupport": true
+    },
+    "capabilities": {
+      "propertySearch": true,
+      "searchablePropertiesConfiguration": true,
+      "preserializedResponseSupport": true,
+      "enableAutoCache": true,
+      "maxPayloadSize": 1073741824,
+      "storageUtilizationReporting": true,
+      "clusteringTypes": [
+        "hexbin", "quadbin"
+      ],
+      "mvtSupport": true,
+      "extensionSupport": true
+    },
+    "connectionSettings": {
+      "maxConnections": 32
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-psql-local",
+        "warmUp": 1,
+        "className": "com.here.xyz.psql.PSQLXyzConnector",
+        "env": {
+          "ECPS_PHRASE": "local"
+        },
+        "protocolVersion": "0.7.0"
+      }
+    },
+    "trusted": true,
+    "forwardParamsConfig": {
+      "cookies": ["here_access", "here_access_st"],
+      "headers": ["AuthorizatioN", "realm"],
+      "queryParams": ["apiKey"]
+    }
+  },
+  {
+    "id": "c1",
+    "params": {
+      "connectorId" : "c1",
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"${PSQL_DB}\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\"})"
+    },
+    "capabilities": {
+      "preserializedResponseSupport": true
+    },
+    "connectionSettings": {
+      "maxConnections": 32
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-psql-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.psql.PSQLXyzConnector",
+        "env": {
+          "ECPS_PHRASE": "local"
+        }
+      }
+    }
+  },
+  {
+    "id": "c2",
+    "params": {
+      "connectorId" : "c2",
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"${PSQL_DB}\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\"})"
+    },
+    "capabilities": {
+      "preserializedResponseSupport": true
+    },
+    "owner": "XYZ-01234567-89ab-cdef-0123-456789aUSER1",
+    "connectionSettings": {
+      "maxConnections": 32
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-psql-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.psql.PSQLXyzConnector",
+        "env": {
+          "ECPS_PHRASE": "local"
+        }
+      }
+    }
+  },
+  {
+    "id": "c3",
+    "params": {
+      "connectorId" : "c3",
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"${PSQL_DB}\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\"})"
+    },
+    "capabilities": {
+      "preserializedResponseSupport": true
+    },
+    "owner": "XYZ-01234567-89ab-cdef-0123-456789aUSER1",
+    "connectionSettings": {
+      "maxConnections": 32
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-psql-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.psql.PSQLXyzConnector",
+        "env": {
+          "ECPS_PHRASE": "local"
+        }
+      }
+    }
+  },
+  {
+    "id": "c4",
+    "params": {
+      "connectorId" : "c4",
+      "ecps": "$encrypt({\"PSQL_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_HOST\":\"${PSQL_HOST}\",\"PSQL_REPLICA_USER\":\"ro_user\",\"PSQL_PORT\":\"${PSQL_PORT}\",\"PSQL_DB\":\"${PSQL_DB}\",\"PSQL_USER\":\"${PSQL_USER}\",\"PSQL_PASSWORD\":\"${PSQL_PASSWORD}\"})"
+    },
+    "capabilities": {
+      "preserializedResponseSupport": true
+    },
+    "connectionSettings": {
+      "maxConnections": 32
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-psql-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.psql.PSQLXyzConnector",
+        "env": {
+          "ECPS_PHRASE": "local"
+        }
       }
     }
   },
@@ -40,33 +242,12 @@
     "connectionSettings": {
       "maxConnections": 32
     },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-failing-local1",
-      "warmUp": 1,
-      "className": "com.here.xyz.hub.connectors.test.FailingPreProcessor",
-      "env": {
-      }
-    }
-  },
-  {
-    "id": "failing2",
-    "params": {
-    },
-    "capabilities": {
-    },
-    "defaultEventTypes": [
-      "ModifyFeaturesEvent.request"
-    ],
-    "connectionSettings": {
-      "maxConnections": 32
-    },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-failing-local2",
-      "warmUp": 1,
-      "className": "com.here.xyz.hub.connectors.test.FailingPreProcessor",
-      "env": {
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-failing-local1",
+        "warmUp": 1,
+        "className": "com.here.xyz.hub.connectors.test.FailingPreProcessor"
       }
     }
   },
@@ -82,12 +263,12 @@
     "connectionSettings": {
       "maxConnections": 32
     },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-error-local",
-      "warmUp": 1,
-      "className": "com.here.xyz.hub.connectors.test.ErrorPreProcessor",
-      "env": {
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-error-local",
+        "warmUp": 1,
+        "className": "com.here.xyz.hub.connectors.test.ErrorPreProcessor"
       }
     }
   },
@@ -103,12 +284,12 @@
     "connectionSettings": {
       "maxConnections": 32
     },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-exception-local",
-      "warmUp": 1,
-      "className": "com.here.xyz.hub.connectors.test.ExceptionPreProcessor",
-      "env": {
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-exception-local",
+        "warmUp": 1,
+        "className": "com.here.xyz.hub.connectors.test.ExceptionPreProcessor"
       }
     }
   },
@@ -119,13 +300,12 @@
       "maxUncompressedSize": 1,
       "preserializedResponseSupport": true
     },
-    "remoteFunction": {
-      "id": "xyz-rule-tagger",
-      "type": "Embedded",
-      "warmUp": 0,
-      "className": "com.here.xyz.hub.connectors.test.DummyPreProcessor",
-      "env": {
-        "ECPS_PHRASE": "testing"
+    "remoteFunctions": {
+      "local": {
+        "id": "xyz-rule-tagger",
+        "type": "Embedded",
+        "warmUp": 0,
+        "className": "com.here.xyz.hub.connectors.test.DummyPreProcessor"
       }
     },
     "defaultEventTypes": [
@@ -138,52 +318,124 @@
     }
   },
   {
-    "id": "c1",
-    "params": {
-    },
-    "capabilities": {
-      "preserializedResponseSupport": true
-    },
-    "connectionSettings": {
-      "maxConnections": 32
-    },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-psql-local",
-      "warmUp": 0,
-      "className": "com.here.xyz.psql.PSQLXyzConnector",
-      "env": {
-        "PSQL_HOST": "${PSQL_HOST}",
-        "PSQL_USER": "postgres",
-        "PSQL_PASSWORD": "password"
-      }
-    }
-  },
-  {
     "id": "test",
     "params": {},
     "capabilities": {},
     "connectionSettings": {
       "maxConnections": 32
     },
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-test-local",
-      "warmUp": 0,
-      "className": "com.here.xyz.hub.connectors.test.TestStorageConnector",
-      "env": {}
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-test-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.hub.connectors.test.TestStorageConnector"
+      }
+    }
+  },
+  {
+    "id": "inMemory",
+    "params": {},
+    "capabilities": {},
+    "connectionSettings": {
+      "maxConnections": 32
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-inMemory-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.hub.connectors.test.InMemoryStorage",
+        "protocolVersion": "0.5.0"
+      }
     }
   },
   {
     "id": "listener-test",
     "params": {},
     "capabilities": {},
-    "remoteFunction": {
-      "type": "Embedded",
-      "id": "xyz-listener-local",
-      "warmUp": 0,
-      "className": "com.here.xyz.hub.connectors.test.DummyListener",
-      "env": {}
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-listener-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.hub.connectors.test.DummyListener"
+      }
+    }
+  },
+  {
+    "id": "another-listener",
+    "params": {},
+    "capabilities": {},
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-listener-local2",
+        "warmUp": 0,
+        "className": "com.here.xyz.hub.connectors.test.DummyListener"
+      }
+    }
+  },
+  {
+    "id": "evaljs-trusted",
+    "connectionSettings": {
+      "maxConnections": 1024,
+      "minConnections": 0
+    },
+    "defaultEventTypes": null,
+    "params": {
+      "connectorId" : "evaljs-trusted"
+    },
+    "remoteFunctions": {
+      "local": {
+        "id": "evaljs-trusted",
+        "type": "Embedded",
+        "className": "com.here.xyz.hub.connectors.test.EvalConnector"
+      }
+    },
+    "forwardParamsConfig": {
+      "cookies": ["here_access"],
+      "headers": ["authn", "X-request-id", "custom_header"],
+      "queryParams": ["apiKey"]
+    },
+    "trusted": true
+  },
+  {
+    "id": "evaljs-untrusted",
+    "connectionSettings": {
+      "maxConnections": 1024,
+      "minConnections": 0
+    },
+    "defaultEventTypes": null,
+    "params": {
+      "connectorId" : "evaljs-untrusted"
+    },
+    "remoteFunctions": {
+      "local": {
+        "id": "evaljs-untrusted",
+        "type": "Embedded",
+        "className": "com.here.xyz.hub.connectors.test.EvalConnector"
+      }
+    }
+  },
+  {
+    "id": "client-throttling",
+    "connectionSettings": {
+      "maxConnections": 1024,
+      "maxConnectionsPerRequester": 10,
+      "minConnections": 10
+    },
+    "params": {
+      "connectorId" : "client-throttling"
+    },
+    "remoteFunctions": {
+      "local": {
+        "type": "Embedded",
+        "id": "xyz-client-throttling-local",
+        "warmUp": 0,
+        "className": "com.here.xyz.hub.connectors.test.MockDelayStorageConnector",
+        "protocolVersion": "0.5.0"
+      }
     }
   }
 ]

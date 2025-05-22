@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,216 +19,303 @@
 
 package com.here.xyz.hub.auth;
 
+import static com.here.xyz.hub.auth.XyzHubActionMatrix.MANAGE_SPACES;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.ID;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.LISTENERS;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.OWNER;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.PACKAGES;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.PROCESSORS;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.SEARCHABLE_PROPERTIES;
+import static com.here.xyz.hub.auth.XyzHubAttributeMap.SORTABLE_PROPERTIES;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.SPACE;
 import static com.here.xyz.hub.auth.XyzHubAttributeMap.STORAGE;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
-import static io.vertx.core.json.Json.encode;
 
+import com.here.xyz.XyzSerializable.Static;
+import com.here.xyz.hub.Service;
+import com.here.xyz.hub.connectors.models.Connector;
 import com.here.xyz.hub.connectors.models.Space;
-import com.here.xyz.hub.rest.HttpException;
+import com.here.xyz.hub.rest.ApiResponseType;
+import com.here.xyz.hub.task.ModifyOp;
 import com.here.xyz.hub.task.ModifyOp.Entry;
+import com.here.xyz.hub.task.ModifySpaceOp;
 import com.here.xyz.hub.task.SpaceTask.ConditionalOperation;
 import com.here.xyz.hub.task.SpaceTask.MatrixReadQuery;
 import com.here.xyz.hub.task.TaskPipeline.Callback;
+import com.here.xyz.hub.util.diff.Difference;
 import com.here.xyz.hub.util.diff.Difference.DiffMap;
 import com.here.xyz.hub.util.diff.Patcher;
+import com.here.xyz.models.hub.jwt.AttributeMap;
+import com.here.xyz.util.service.HttpException;
 import io.vertx.core.json.Json;
-import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.json.jackson.DatabindCodec;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
 
+@SuppressWarnings("rawtypes")
 public class SpaceAuthorization extends Authorization {
+  private static final Logger logger = LogManager.getLogger();
 
   public static List<String> basicEdit = Arrays
-      .asList("title", "description", "client", "copyright", "license", "shared", "enableUUID", "cacheTTL", STORAGE, LISTENERS, PROCESSORS,
-          SEARCHABLE_PROPERTIES);
+      .asList("id", "title", "description", "client", "copyright", "license", "shared", "cacheTTL", "readOnly", "extends",
+          "versionsToKeep", STORAGE, LISTENERS, PROCESSORS, SEARCHABLE_PROPERTIES, SORTABLE_PROPERTIES );
 
   public static List<String> packageEdit = Collections.singletonList(PACKAGES);
 
-  public static void authorizeReadSpaces(MatrixReadQuery task, Callback<MatrixReadQuery> callback) {
+  public static void authorizeReadSpaces(MatrixReadQuery task, Callback<MatrixReadQuery> callback) throws Exception {
     //Check if anonymous token is being used
     if (task.getJwt().anonymous) {
-      callback.exception(new HttpException(FORBIDDEN, "Accessing spaces isn't possible with an anonymous token."));
-    } else if (task.getJwt().getXyzHubMatrix() == null) {
-      callback.exception(new HttpException(FORBIDDEN, "Insufficient rights to read the requested resource."));
-    }
-    else {
-      if (task.canReadConnectorsProperties) {
-        final XyzHubActionMatrix connectorsReadMatrix = new XyzHubActionMatrix().accessConnectors(new XyzHubAttributeMap());
-        task.canReadConnectorsProperties = task.getJwt().getXyzHubMatrix().matches(connectorsReadMatrix);
-      }
-
-      /*
-       * No further checks are necessary. Authenticated users generally have access to this resource.
-       * The resulting list response will only contain spaces the token has access to.
-       */
-      callback.call(task);
-    }
-  }
-
-  public static void authorizeModifyOp(ConditionalOperation task, Callback<ConditionalOperation> callback) throws Exception {
-
-    final XyzHubActionMatrix tokenRights = task.getJwt().getXyzHubMatrix();
-    final XyzHubActionMatrix requestRights = new XyzHubActionMatrix();
-
-    final Entry<JsonObject, Space, Space> entry = task.modifyOp.entries.get(0);
-    final JsonObject input = entry.input;
-    final Space head = entry.head;
-    final Space target = entry.result;
-
-    boolean isAdminEdit, isBasicEdit, isStorageEdit, isListenersEdit, isProcessorsEdit, isPackagesEdit, isSearchablePropertiesEdit;
-    final AttributeMap xyzhubFilter;
-
-    //Check if anonymous token is being used
-    if (task.getJwt().anonymous) {
-      callback.exception(new HttpException(FORBIDDEN, "Accessing spaces isn't possible with an anonymous token."));
+      callback.exception(new HttpException(FORBIDDEN, "Accessing this resource with an anonymous token is not possible."));
       return;
     }
 
-    // CREATE
-    if (task.isCreate()) {
-      xyzhubFilter = new XyzHubAttributeMap()
-              .withValue(OWNER, input.getString("owner"))
-              .withValue(SPACE, input.getString("id"));
-      isBasicEdit = isBasicEdit(asMap(task.template), asMap(input));
-      isAdminEdit = isAdminEdit(asMap(task.template), asMap(input));
-      isStorageEdit = isPropertyEdit(asMap(task.template), asMap(input), STORAGE);
-      isListenersEdit = isPropertyEdit(asMap(task.template), asMap(input), LISTENERS);
-      isProcessorsEdit = isPropertyEdit(asMap(task.template), asMap(input), PROCESSORS);
-      isPackagesEdit = isPropertyEdit(asMap(task.template), asMap(input), PACKAGES);
-      isSearchablePropertiesEdit = isPropertyEdit(asMap(task.template), asMap(input), SEARCHABLE_PROPERTIES);
+    if (getXyzHubMatrix(task.getJwt()) == null) {
+      callback.exception(new HttpException(FORBIDDEN, "Insufficient rights to read the requested resource."));
+      return;
     }
-    // READ, UPDATE, DELETE
-    else {
-      if (task.isRead() && head.isShared()) {
-        //User is trying to read a shared space this is allowed for any authenticated user
+
+    if (task.canReadConnectorsProperties) {
+      final XyzHubActionMatrix connectorsReadMatrix = new XyzHubActionMatrix().accessConnectors(new XyzHubAttributeMap());
+      task.canReadConnectorsProperties = getXyzHubMatrix(task.getJwt()).matches(connectorsReadMatrix);
+    }
+
+    if (task.responseType == ApiResponseType.SPACE && task.responseSpaces != null && task.responseSpaces.size() == 1) {
+      Space space = task.responseSpaces.get(0);
+
+      final XyzHubActionMatrix tokenRights = getXyzHubMatrix(task.getJwt());
+      if (tokenRights == null)
+        throw new HttpException(FORBIDDEN, "Insufficient rights to read the requested resource.");
+
+      task.canReadConnectorsProperties = tokenRights.containsKey(XyzHubActionMatrix.ACCESS_CONNECTORS) && !tokenRights.get(XyzHubActionMatrix.ACCESS_CONNECTORS).isEmpty();
+
+      AttributeMap xyzhubFilter = new XyzHubAttributeMap()
+          .withValue(OWNER, space.getOwner())
+          .withValue(SPACE, space.getId())
+          .withValue(PACKAGES, space.getPackages());
+
+      //Mark in the task, if the app is allowed to read the admin properties.
+      final XyzHubActionMatrix adminMatrix = new XyzHubActionMatrix().adminSpaces(xyzhubFilter);
+      task.canReadAdminProperties = tokenRights.matches(adminMatrix);
+
+      if (space.isShared()) {
+        // User is trying to read a shared space this is allowed for any authenticated user
         callback.call(task);
         return;
       }
 
+      if (tokenRights.entrySet().stream().flatMap(e -> e.getValue().stream()).noneMatch(f -> f.matches(xyzhubFilter)))
+        throw new HttpException(FORBIDDEN, "Insufficient rights to read the requested resource.");
+    }
+
+    /*
+     * No further checks are necessary. Authenticated users generally have access to this resource.
+     * The resulting list response will only contain spaces the token has access to or the individual space access has been checked.
+     */
+    callback.call(task);
+  }
+
+  public static void authorizeModifyOp(ConditionalOperation task, Callback<ConditionalOperation> callback) throws Exception {
+    final XyzHubActionMatrix tokenRights = getXyzHubMatrix(task.getJwt());
+    final XyzHubActionMatrix requestRights = new XyzHubActionMatrix();
+
+    final Entry<Space> entry = task.modifyOp.entries.get(0);
+    final Map<String, Object> input = entry.input;
+    final Space head = entry.head;
+    final Space target = entry.result;
+
+    final Map templateAsMap = asMap(task.template);
+    final Map inputAsMap = asMap(DatabindCodec.mapper().convertValue(input, Space.class));
+    final Map targetAsMap = asMap(target);
+    final Map headAsMap = asMap(head);
+
+    boolean isAdminEdit, isBasicEdit, isStorageEdit, isListenersEdit, isProcessorsEdit, isPackagesEdit, isSearchablePropertiesEdit, isSortablePropertiesEdit;
+    final AttributeMap xyzhubFilter;
+
+    //Check if anonymous token is being used
+    if (task.getJwt().anonymous) {
+      callback.exception(new HttpException(FORBIDDEN, "Accessing this resource with an anonymous token is not possible."));
+      return;
+    }
+
+    //CREATE
+    if (task.isCreate()) {
+      xyzhubFilter = new XyzHubAttributeMap()
+          .withValue(OWNER, input.get("owner"))
+          .withValue(SPACE, input.get("id"));
+      isBasicEdit = isBasicEdit(templateAsMap, inputAsMap);
+      isAdminEdit = isAdminEdit(templateAsMap, inputAsMap);
+      isStorageEdit = isPropertyEdit(templateAsMap, inputAsMap, STORAGE);
+      isListenersEdit = isPropertyEdit(templateAsMap, inputAsMap, LISTENERS);
+      isProcessorsEdit = isPropertyEdit(templateAsMap, inputAsMap, PROCESSORS);
+      isPackagesEdit = isPropertyEdit(templateAsMap, inputAsMap, PACKAGES);
+      isSearchablePropertiesEdit = isPropertyEdit(templateAsMap, inputAsMap, SEARCHABLE_PROPERTIES);
+      isSortablePropertiesEdit   = isPropertyEdit(templateAsMap, inputAsMap, SORTABLE_PROPERTIES);
+
+      final XyzHubActionMatrix adminMatrix = new XyzHubActionMatrix().adminSpaces(xyzhubFilter);
+      boolean hasAdminPermissions = tokenRights != null && tokenRights.matches(adminMatrix);
+      //If the creation contains a different space ID than the randomly-generated one.
+      if (!hasAdminPermissions && isPropertyEdit(templateAsMap, inputAsMap, ID) && tokenRights != null && tokenRights
+          .containsKey(MANAGE_SPACES)) {
+        tokenRights.put(MANAGE_SPACES, tokenRights.get(MANAGE_SPACES)
+            .stream()
+            .filter(permission -> permission.containsKey(SPACE) || permission.isEmpty())
+            .collect(Collectors.toList()));
+      }
+    }
+    // UPDATE, DELETE
+    else {
       xyzhubFilter = new XyzHubAttributeMap()
           .withValue(OWNER, head.getOwner())
           .withValue(SPACE, head.getId())
           .withValue(PACKAGES, head.getPackages());
-      isBasicEdit = isBasicEdit(asMap(target), asMap(head));
-      isAdminEdit = !task.isDelete() && isAdminEdit(asMap(target), asMap(head));
-      isStorageEdit = !task.isDelete() && isPropertyEdit(asMap(target), asMap(head), STORAGE);
-      isListenersEdit = !task.isDelete() && isPropertyEdit(asMap(target), asMap(head), LISTENERS);
-      isProcessorsEdit = !task.isDelete() && isPropertyEdit(asMap(target), asMap(head), PROCESSORS);
-      isPackagesEdit = !task.isDelete() && isPropertyEdit(asMap(target), asMap(head), PACKAGES);
-      isSearchablePropertiesEdit = !task.isDelete() && isPropertyEdit(asMap(target), asMap(head), SEARCHABLE_PROPERTIES);
+      isBasicEdit = isBasicEdit(targetAsMap, headAsMap);
+      isAdminEdit = !task.isDelete() && isAdminEdit(targetAsMap, headAsMap);
+      isStorageEdit = !task.isDelete() && isPropertyEdit(targetAsMap, headAsMap, STORAGE);
+      isListenersEdit = !task.isDelete() && isPropertyEdit(targetAsMap, headAsMap, LISTENERS);
+      isProcessorsEdit = !task.isDelete() && isPropertyEdit(targetAsMap, headAsMap, PROCESSORS);
+      isPackagesEdit = !task.isDelete() && isPropertyEdit(targetAsMap, headAsMap, PACKAGES);
+      isSearchablePropertiesEdit = !task.isDelete() && isPropertyEdit(targetAsMap, headAsMap, SEARCHABLE_PROPERTIES);
+      isSortablePropertiesEdit = !task.isDelete() && isPropertyEdit(targetAsMap, headAsMap, SORTABLE_PROPERTIES);
     }
 
-    // Mark in the task, if the app is allowed to read the admin properties.
+    //Mark in the task, if the app is allowed to read the admin properties.
     final XyzHubActionMatrix adminMatrix = new XyzHubActionMatrix().adminSpaces(xyzhubFilter);
     task.canReadAdminProperties = tokenRights != null && tokenRights.matches(adminMatrix);
 
-    // Mark in the task, if the user is allowed to read the connectors on READ and WRITE operations.
+    //Mark in the task, if the user is allowed to read the connectors on READ and WRITE operations.
     task.canReadConnectorsProperties = canReadConnectorProperties(tokenRights);
 
-    // On Read operations, any access to the space grants read access, this includes readFeatures, createFeatures, etc.
-    if (task.isRead()) {
-      if (tokenRights == null || tokenRights.entrySet().stream().flatMap(e -> e.getValue().stream()).noneMatch(f -> f.matches(xyzhubFilter))) {
-        throw new HttpException(FORBIDDEN, "Insufficient rights to read the requested resource.");
-      }
+    List<CompletableFuture<Void>> futureList = new ArrayList<>();
+    final XyzHubActionMatrix connectorsRights = new XyzHubActionMatrix();
 
-      callback.call(task);
-      return;
-    }
-
-    // If this is an edit on storage, listeners or processors properties.
+    //If this is an edit on storage, listeners or processors properties.
     if (isStorageEdit || isListenersEdit || isProcessorsEdit) {
-      final XyzHubActionMatrix connectorsRights = new XyzHubActionMatrix();
+
+      Set<String> connectorIds = new HashSet<>();
 
       //Check for storage.
-      if (isStorageEdit) {
-        connectorsRights.accessConnectors(new XyzHubAttributeMap().withValue(ID, getStorageFromInput(entry)));
-      }
+      if (isStorageEdit) connectorIds.add(getStorageFromInput(entry));
 
       //Check for listeners.
-      if (isListenersEdit) {
-        final Set<String> connectorIds = new HashSet<>(getConnectorIds(input, LISTENERS));
-        connectorIds.forEach(id -> connectorsRights.accessConnectors(XyzHubAttributeMap.forIdValues(id)));
-      }
+      if (isListenersEdit) connectorIds.addAll(getConnectorIds(LISTENERS, targetAsMap, headAsMap));
 
       //Check for processors.
-      if (isProcessorsEdit) {
-        final Set<String> connectorIds = new HashSet<>(getConnectorIds(input, PROCESSORS));
-        connectorIds.forEach(id -> connectorsRights.accessConnectors(XyzHubAttributeMap.forIdValues(id)));
-      }
+      if (isProcessorsEdit) connectorIds.addAll(getConnectorIds(PROCESSORS, targetAsMap, headAsMap));
 
-      if (connectorsRights.get("accessConnectors") != null && !connectorsRights.get("accessConnectors").isEmpty()) {
-        task.canReadConnectorsProperties = tokenRights != null && tokenRights.matches(connectorsRights);
-        if (!task.canReadConnectorsProperties) {
-          throw new HttpException(FORBIDDEN, getForbiddenMessage(connectorsRights, tokenRights));
-        }
-      }
+      connectorIds.forEach(id -> {
+        CompletableFuture<Void> f = new CompletableFuture<>();
+        futureList.add(f);
+        Service.connectorConfigClient.get(task.context.get("marker"), id, ar -> {
+          if (ar.succeeded()) {
+            Connector c = ar.result();
+            connectorsRights.accessConnectors(XyzHubAttributeMap.forIdValues(c.owner, c.id));
+          } else {
+            //If connector does not exist.
+            logger.warn((Marker) task.context.get("marker"), "Tried to load non-existing connector '{}'.", id, ar.cause());
+            connectorsRights.accessConnectors(XyzHubAttributeMap.forIdValues(id));
+          }
+          f.complete(null);
+        });
+      });
     }
 
-    // either for admin or manage spaces, the packages access must be tested
-    if (isPackagesEdit) {
-      getPackagesFromInput(entry).forEach(packageId -> requestRights.managePackages(
-          XyzHubAttributeMap.forIdValues(target.getOwner(), packageId)));
-    }
+    CompletableFuture.allOf(futureList.toArray(new CompletableFuture[0]))
+        .thenRun(() -> {
+          if (connectorsRights.get("accessConnectors") != null && !connectorsRights.get("accessConnectors").isEmpty()) {
+            task.canReadConnectorsProperties = tokenRights != null && tokenRights.matches(connectorsRights);
+            if (!task.canReadConnectorsProperties) {
+              callback.exception(new HttpException(FORBIDDEN, getForbiddenMessage(connectorsRights, tokenRights)));
+              return;
+            }
+          }
 
-    // checks if the user has useCapabilities: ['searchablePropertiesConfiguration']
-    if (isSearchablePropertiesEdit) {
-      requestRights.useCapabilities(new AttributeMap().withValue(ID, "searchablePropertiesConfiguration"));
-    }
+          //Either for admin or manage spaces, the packages access must be tested
+          if (isPackagesEdit) {
+            //Requester must hold manageSpaces permission when adding new packages to space
+            if (task.isCreate() || isPackagesAdded(head, target)) {
+              // to add or edit a package within a space, you must have space owner permissions
+              requestRights.manageSpaces(xyzhubFilter);
+              getPackagesFromInput(entry).forEach(packageId -> requestRights.managePackages(
+                  XyzHubAttributeMap.forIdValues(target.getOwner(), packageId)));
+            } else {
+              boolean isOwner = tokenRights != null && tokenRights.matches(new XyzHubActionMatrix().manageSpaces(xyzhubFilter));
+              if (!isOwner) {
+                // then it's just a package removal
+                List<String> removedPackages = new ArrayList<>(getPackagesFromSpace(head));
+                removedPackages.removeAll(getPackagesFromSpace(target));
+                removedPackages.forEach(packageId -> requestRights.managePackages(XyzHubAttributeMap.forIdValues(target.getOwner(), packageId)));
+              }
+            }
+          }
 
-    // If this is an edit on admin properties.
-    if (isAdminEdit) {
-      boolean ownerChanged = !task.isCreate() && input.containsKey("owner") && !input.getString("owner").equals(head.getOwner());
-      if (ownerChanged) {
-        XyzHubAttributeMap additionalNeededPermission = new XyzHubAttributeMap();
-        additionalNeededPermission.withValue(SPACE, head.getId());
-        additionalNeededPermission.withValue(OWNER, input.getString("owner"));
-        requestRights.adminSpaces(additionalNeededPermission);
-      }
+          //Checks if the user has useCapabilities: ['searchablePropertiesConfiguration']
+          if (isSearchablePropertiesEdit || isSortablePropertiesEdit) {
+            requestRights.useCapabilities(new AttributeMap().withValue(ID, "searchablePropertiesConfiguration"));
+          }
 
-      requestRights.adminSpaces(xyzhubFilter);
-    }
+          //If this is an edit on admin properties.
+          if (isAdminEdit) {
+            boolean ownerChanged = !task.isCreate() && input.containsKey("owner") && !input.get("owner").equals(head.getOwner());
+            if (ownerChanged) {
+              XyzHubAttributeMap additionalNeededPermission = new XyzHubAttributeMap();
+              additionalNeededPermission.withValue(SPACE, head.getId());
+              additionalNeededPermission.withValue(OWNER, input.get("owner"));
+              requestRights.adminSpaces(additionalNeededPermission);
+            }
 
-    if (isBasicEdit) {
-      requestRights.manageSpaces(xyzhubFilter);
-    }
+            requestRights.adminSpaces(xyzhubFilter);
+          }
 
-    evaluateRights(requestRights, tokenRights, task, callback);
+          if (isBasicEdit) {
+            requestRights.manageSpaces(xyzhubFilter);
+          }
+
+          evaluateRights(requestRights, tokenRights, task, callback);
+        }).exceptionally(t -> {
+          logger.error((Marker) task.context.get("marker"), "Exception while checking connector permissions", t);
+          callback.exception(t);
+          return null;
+        });
   }
 
-  private static Collection<String> getConnectorIds(@Nonnull final JsonObject input, @Nonnull final String field) {
-    final Object connectors = input.getValue(field);
-    if (connectors instanceof JsonArray) return getConnectorIdsFromInput((JsonArray) connectors);
-    if (connectors instanceof JsonObject) return ((JsonObject) connectors).getMap().keySet();
-    return Collections.emptyList();
-  }
+  private static Set getConnectorIds(@Nonnull final String field, @Nonnull final Map target, @Nullable final Map head) {
+    if (!target.containsKey(field))
+      return Collections.emptySet();
 
-  private static List<String> getConnectorIdsFromInput(JsonArray connectors) {
-    if (connectors == null) {
-      return Collections.emptyList();
+    if (head == null)
+      return ((Map) target.get(field)).keySet();
+
+    // check the difference between head & input and return the modified ones
+    Difference diff = Patcher.getDifference(head, target);
+    if (diff instanceof DiffMap && ((DiffMap) diff).containsKey(field)) {
+      diff = ((DiffMap) diff).get(field);
+      if (diff instanceof DiffMap) {
+        return ((DiffMap) diff).keySet();
+      }
     }
-    return connectors.stream().map(l -> ((JsonObject) l).getString("id")).collect(Collectors.toList());
+
+    return Collections.emptySet();
   }
 
   private static boolean isAdminEdit(Map state1, Map state2) {
     try {
       DiffMap diff = (DiffMap) Patcher.getDifference(state1, state2);
       final List<String> basicPlusPackagesList = Stream.concat(basicEdit.stream(), packageEdit.stream()).collect(Collectors.toList());
+
       return diff != null && !basicPlusPackagesList.containsAll(diff.keySet());
     } catch (Exception e) {
       return true;
@@ -254,28 +341,54 @@ public class SpaceAuthorization extends Authorization {
   }
 
   private static boolean canReadConnectorProperties(XyzHubActionMatrix tokenRights) {
-    if (tokenRights == null)
+    if (tokenRights == null) {
       return false;
+    }
 
-    if (tokenRights.get(XyzHubActionMatrix.ACCESS_CONNECTORS) == null)
+    if (tokenRights.get(XyzHubActionMatrix.ACCESS_CONNECTORS) == null) {
       return false;
+    }
 
     return !tokenRights.get(XyzHubActionMatrix.ACCESS_CONNECTORS).isEmpty();
   }
 
-  private static String getStorageFromInput(Entry<JsonObject, Space, Space> entry) {
-    return entry.input.getJsonObject("storage").getString("id");
+  private static String getStorageFromInput(Entry<Space> entry) {
+    return new JsonObject(entry.input).getJsonObject("storage").getString("id");
   }
 
-  private static List<String> getPackagesFromInput(Entry<JsonObject, Space, Space> entry) {
+  private static List<String> getPackagesFromInput(Entry<Space> entry) {
     if (entry.input.containsKey("packages")) {
-      return entry.input.getJsonArray("packages").stream().map(Object::toString).collect(Collectors.toList());
+      return new JsonObject(entry.input).getJsonArray("packages").stream().map(Object::toString).collect(Collectors.toList());
     }
     return Collections.emptyList();
   }
 
+  private static List<String> getPackagesFromSpace(Space space) {
+    if (space != null && space.getPackages() != null) {
+      return space.getPackages();
+    }
+    return Collections.emptyList();
+  }
+
+  private static boolean isPackagesAdded(Space head, Space target) {
+    final List<String> targetPackages = getPackagesFromSpace(target);
+    if (targetPackages.isEmpty()) {
+      return false;
+    }
+
+    final List<String> difference = new ArrayList<>(targetPackages);
+    difference.removeAll(getPackagesFromSpace(head));
+
+    return !difference.isEmpty();
+  }
 
   private static Map asMap(Object object) {
-    return Json.decodeValue(encode(object), Map.class);
+    try {
+      //noinspection unchecked
+      return ModifyOp.filter(
+          Json.decodeValue(DatabindCodec.mapper().writerWithView(Static.class).writeValueAsString(object), Map.class), ModifySpaceOp.metadataFilter);
+    } catch (Exception e) {
+      return Collections.emptyMap();
+    }
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,19 +20,30 @@
 package com.here.xyz.hub.rest;
 
 /**
- * An enumeration with all responses that should be returned to the client. If the required response type is not available and {@link
+ * An enumeration with all responses that should be returned to the client. If the required response type is not available an {@link
  * com.here.xyz.responses.ErrorResponse} should be returned.
  */
 public enum ApiResponseType {
   EMPTY,
   FEATURE,
   FEATURE_COLLECTION,
-  MVT,
-  MVT_FLATTENED,
+  CHANGESET_COLLECTION,
+  MVT(true),
+  MVT_FLATTENED(true),
   SPACE,
   SPACE_LIST,
   @Deprecated
   COUNT_RESPONSE,
   HEALTHY_RESPONSE,
-  STATISTICS_RESPONSE
+  STATISTICS_RESPONSE;
+
+  public final boolean binary;
+
+  ApiResponseType() {
+    this.binary = false;
+  }
+
+  ApiResponseType(boolean binary) {
+    this.binary = binary;
+  }
 }

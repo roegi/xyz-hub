@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,45 +19,57 @@
 
 package com.here.xyz.events;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonView;
 import com.here.xyz.Payload;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * The base class of all events that are send by the XYZ Hub to a "procedure". All events extend this event. All "procedures" can be sure to
+ * The base class of all events that are sent by the XYZ Hub to a "procedure". All events extend this event. All "procedures" can be sure to
  * receive events that extend this class and need to respond with any {@link com.here.xyz.responses.XyzResponse}.
  *
- * Its not defined if that procedure is embedded into the XYZ Hub or located at a remote host nor is any assumption being made about how the
+ * It's not defined if that procedure is embedded into the XYZ Hub or located at a remote host nor is any assumption being made about how the
  * event or response are transferred. Basically the event-response model just describes what events the XYZ hub may trigger and how the
- * processing "procedures" must respond.Ø
+ * processing "procedures" must respond.
  *
  * A "procedure" is defined as
  *
- * Every event is basically encoded into a binary using an "procedure encoder". Be aware that this event is translated into some protocol
- * using a corresponding encoder. The protocol encoder  only the remote procedure client will receive this event. It's not necessary that
+ * Every event is basically encoded into a binary using a "procedure encoder". Be aware that this event is translated into some protocol
+ * using a corresponding encoder. Only the remote procedure client will receive this event. It's not necessary that
  * the remote procedure itself uses this event class to communicate. Rather the remote procedure client needs to accept the event, translate
- * it into an arbitrary binary (byte[]), which is then send to a remote service that processed the event.
+ * it into an arbitrary binary (byte[]), which is then sent to a remote service that processes the event.
  */
 @JsonSubTypes({
     @JsonSubTypes.Type(value = ModifySpaceEvent.class, name = "ModifySpaceEvent"),
+    @JsonSubTypes.Type(value = ModifySubscriptionEvent.class, name = "ModifySubscriptionEvent"),
     @JsonSubTypes.Type(value = ModifyFeaturesEvent.class, name = "ModifyFeaturesEvent"),
+    @JsonSubTypes.Type(value = WriteFeaturesEvent.class, name = "WriteFeaturesEvent"),
     @JsonSubTypes.Type(value = TransformEvent.class, name = "TransformEvent"),
     @JsonSubTypes.Type(value = RelocatedEvent.class, name = "RelocatedEvent"),
     @JsonSubTypes.Type(value = EventNotification.class, name = "EventNotification"),
-    @JsonSubTypes.Type(value = DeleteFeaturesByTagEvent.class, name = "DeleteFeaturesByTagEvent"),
     @JsonSubTypes.Type(value = SearchForFeaturesEvent.class, name = "SearchForFeaturesEvent"),
     @JsonSubTypes.Type(value = IterateFeaturesEvent.class, name = "IterateFeaturesEvent"),
     @JsonSubTypes.Type(value = GetFeaturesByBBoxEvent.class, name = "GetFeaturesByBBoxEvent"),
     @JsonSubTypes.Type(value = GetFeaturesByGeometryEvent.class, name = "GetFeaturesByGeometryEvent"),
     @JsonSubTypes.Type(value = GetFeaturesByTileEvent.class, name = "GetFeaturesByTileEvent"),
-    @JsonSubTypes.Type(value = CountFeaturesEvent.class, name = "CountFeaturesEvent"),
     @JsonSubTypes.Type(value = GetStatisticsEvent.class, name = "GetStatisticsEvent"),
+    @JsonSubTypes.Type(value = GetStorageStatisticsEvent.class, name = "GetStorageStatisticsEvent"),
     @JsonSubTypes.Type(value = HealthCheckEvent.class, name = "HealthCheckEvent"),
     @JsonSubTypes.Type(value = GetFeaturesByIdEvent.class, name = "GetFeaturesByIdEvent"),
-    @JsonSubTypes.Type(value = LoadFeaturesEvent.class, name = "LoadFeaturesEvent")
+    @JsonSubTypes.Type(value = LoadFeaturesEvent.class, name = "LoadFeaturesEvent"),
+    @JsonSubTypes.Type(value = ContentModifiedNotification.class, name = "ContentModifiedNotification"),
+    @JsonSubTypes.Type(value = DeleteChangesetsEvent.class, name = "DeleteChangesetsEvent"),
+    @JsonSubTypes.Type(value = IterateChangesetsEvent.class, name = "IterateChangesetsEvent"),
+    @JsonSubTypes.Type(value = GetChangesetStatisticsEvent.class, name = "GetChangesetStatisticsEvent"),
+    @JsonSubTypes.Type(value = OneTimeActionEvent.class, name = "OneTimeActionEvent")
 })
-
+@JsonIgnoreProperties(ignoreUnknown = true)
 public abstract class Event<T extends Event> extends Payload {
 
   @JsonView(ExcludeFromHash.class)
@@ -67,15 +79,23 @@ public abstract class Event<T extends Event> extends Payload {
   @JsonView(ExcludeFromHash.class)
   private String ifNoneMatch;
   @JsonView(ExcludeFromHash.class)
-  private Boolean preferPrimaryDataSource;
+  private boolean preferPrimaryDataSource;
   @JsonView(ExcludeFromHash.class)
   private Map<String, Object> params;
+  private TrustedParams trustedParams;
   private String space;
   private Map<String, Object> metadata;
   @JsonView(ExcludeFromHash.class)
   private String tid;
   @JsonView(ExcludeFromHash.class)
+  private String jwt;
+  @JsonView(ExcludeFromHash.class)
   private String aid;
+  @JsonView(ExcludeFromHash.class)
+  @JsonInclude(Include.ALWAYS)
+  private String version = VERSION;
+  @JsonView(ExcludeFromHash.class)
+  private String sourceRegion;
 
   /**
    * The identifier of the space.
@@ -99,7 +119,7 @@ public abstract class Event<T extends Event> extends Payload {
   }
 
   /**
-   * An map with arbitrary parameters configured in the XYZ Hub service for each space. Therefore, each space can have different
+   * A map with arbitrary parameters configured in the XYZ Hub service for each space. Therefore, each space can have different
    * parameters.
    *
    * @return a map with arbitrary parameters defined for the space.
@@ -120,6 +140,27 @@ public abstract class Event<T extends Event> extends Payload {
     return (T) this;
   }
 
+  /**
+   * A parameter map which may contains sensitive information such as identities and is forwarded only to connectors
+   * marked with "trusted" flag.
+   *
+   * @return a map with arbitrary parameters.
+   */
+  public TrustedParams getTrustedParams() {
+    return this.trustedParams;
+  }
+
+  @SuppressWarnings("WeakerAccess")
+  public void setTrustedParams(TrustedParams trustedParams) {
+    this.trustedParams = trustedParams;
+  }
+
+  @SuppressWarnings("unused")
+  public T withTrustedParams(TrustedParams trustedParams) {
+    setTrustedParams(trustedParams);
+    //noinspection unchecked
+    return (T) this;
+  }
 
   /**
    * The stream identifier that should be used for logging purpose. In fact the XYZ Hub service will internally generate a unique stream
@@ -200,9 +241,9 @@ public abstract class Event<T extends Event> extends Payload {
 
   @SuppressWarnings("unused")
   public T withMetadata(Map<String, Object> metadata) {
-    this.metadata = metadata;
+    setMetadata(metadata);
     //noinspection unchecked
-    return (T) metadata;
+    return (T) this;
   }
 
   /**
@@ -220,6 +261,25 @@ public abstract class Event<T extends Event> extends Payload {
   @SuppressWarnings("unused")
   public T withTid(String tid) {
     setTid(tid);
+    //noinspection unchecked
+    return (T) this;
+  }
+
+  /**
+   * The complete JWT token to be forwarded to trusted connectors.
+   */
+  public String getJwt() {
+    return this.jwt;
+  }
+
+  @SuppressWarnings("WeakerAccess")
+  public void setJwt(String jwt) {
+    this.jwt = jwt;
+  }
+
+  @SuppressWarnings("unused")
+  public T withJwt(String jwt) {
+    setJwt(jwt);
     //noinspection unchecked
     return (T) this;
   }
@@ -251,25 +311,130 @@ public abstract class Event<T extends Event> extends Payload {
    * @return if the primary data source is preferred
    */
   @SuppressWarnings("unused")
-  public Boolean getPreferPrimaryDataSource() {
+  public boolean getPreferPrimaryDataSource() {
     return this.preferPrimaryDataSource;
   }
 
   @SuppressWarnings("WeakerAccess")
-  public void setPreferPrimaryDataSource(Boolean preferPrimaryDataSource) {
+  public void setPreferPrimaryDataSource(boolean preferPrimaryDataSource) {
     this.preferPrimaryDataSource = preferPrimaryDataSource;
   }
 
   @SuppressWarnings("unused")
-  public T withPreferPrimaryDataSource(Boolean preferPrimaryDataSource) {
+  public T withPreferPrimaryDataSource(boolean preferPrimaryDataSource) {
     setPreferPrimaryDataSource(preferPrimaryDataSource);
     //noinspection unchecked
     return (T) this;
   }
 
-  @Override
-  public String toString() {
-    return serialize();
+  /**
+   * The version of the event protocol.
+   *
+   * @return The version
+   */
+  public String getVersion() {
+    return this.version;
   }
 
+  @SuppressWarnings("unused")
+  public void setVersion(String version) {
+    this.version = version;
+  }
+
+  @SuppressWarnings("unused")
+  public T withVersion(String version) {
+    setVersion(version);
+    //noinspection unchecked
+    return (T) this;
+  }
+
+  public String getSourceRegion() {
+    return sourceRegion;
+  }
+
+  public void setSourceRegion(String sourceRegion) {
+    this.sourceRegion = sourceRegion;
+  }
+
+  public T withSourceRegion(String sourceRegion) {
+    setSourceRegion(sourceRegion);
+    return (T) this;
+  }
+
+  public static boolean isAllowedEventType(Map<String, Set<String>> allowedEventTypes, String eventType, String region) {
+    if (allowedEventTypes == null)
+      return true;
+    Set<String> allowed = new HashSet<>();
+    if (allowedEventTypes.containsKey("*"))
+      allowed.addAll(allowedEventTypes.get("*"));
+    if (region != null && allowedEventTypes.containsKey(region))
+      allowed.addAll(allowedEventTypes.get(region));
+    return allowed.contains("*") || allowed.contains(eventType);
+  }
+
+  public static class TrustedParams extends HashMap<String, Object> {
+    public static final String COOKIES = "cookies";
+    public static final String HEADERS = "headers";
+    public static final String QUERY_PARAMS = "queryParams";
+
+    public Map<String, String> getCookies() {
+      //noinspection unchecked
+      return (Map<String, String>) get(COOKIES);
+    }
+
+    public void setCookies(Map<String, String> cookies) {
+      if (cookies == null) return;
+      put(COOKIES, cookies);
+    }
+
+    public void putCookie(String name, String value) {
+      if (!containsKey(COOKIES)) put(COOKIES, new HashMap<String, String>());
+      getCookies().put(name, value);
+    }
+
+    public String getCookie(String name) {
+      if (containsKey(COOKIES)) return getCookies().get(name);
+      return null;
+    }
+
+    public Map<String, String> getHeaders() {
+      //noinspection unchecked
+      return (Map<String, String>) get(HEADERS);
+    }
+
+    public void setHeaders(Map<String, String> headers) {
+      if (headers == null) return;
+      put(HEADERS, headers);
+    }
+
+    public void putHeader(String name, String value) {
+      if (!containsKey(HEADERS)) put(HEADERS, new HashMap<String, String>());
+      getHeaders().put(name, value);
+    }
+
+    public String getHeader(String name) {
+      if (containsKey(HEADERS)) return getHeaders().get(name);
+      return null;
+    }
+
+    public Map<String, String> getQueryParams() {
+      //noinspection unchecked
+      return (Map<String, String>) get(QUERY_PARAMS);
+    }
+
+    public void setQueryParams(Map<String, String> queryParams) {
+      if (queryParams == null) return;
+      put(QUERY_PARAMS, queryParams);
+    }
+
+    public void putQueryParam(String name, String value) {
+      if (!containsKey(QUERY_PARAMS)) put(QUERY_PARAMS, new HashMap<String, String>());
+      getQueryParams().put(name, value);
+    }
+
+    public String getQueryParam(String name) {
+      if (containsKey(QUERY_PARAMS)) return getQueryParams().get(name);
+      return null;
+    }
+  }
 }

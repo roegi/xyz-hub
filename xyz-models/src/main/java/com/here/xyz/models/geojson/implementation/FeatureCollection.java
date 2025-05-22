@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2013 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,13 +42,19 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
 
   private LazyParsable<List<Feature>> features;
   private BBox bbox;
+  private Boolean partial;
+  @Deprecated
   private String handle;
+  private String nextPageToken;
+  @Deprecated
   private Long count;
   private List<String> inserted;
   private List<String> updated;
   private List<String> deleted;
   private List<Feature> oldFeatures;
   private List<ModificationFailure> failed;
+  @JsonInclude(Include.NON_EMPTY)
+  private Long version;
 
   public FeatureCollection() {
     setFeatures(new ArrayList<>());
@@ -152,6 +158,7 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
 
   /**
    * Returns the Space handle which is used to iterate above data.
+   * @deprecated use {@link #getNextPageToken()} instead.
    *
    * @return the handle.
    */
@@ -161,6 +168,7 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
 
   /**
    * Sets the Space handle that can be used to continue an iterate.
+   * @deprecated use {@link #setNextPageToken(String)} instead.
    *
    * @param handle the handle, if null the handle property is removed.
    */
@@ -169,9 +177,62 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
     this.handle = handle;
   }
 
+  /**
+   * @deprecated use {@link #withNextPageToken(String)} instead.
+   */
   @SuppressWarnings("unused")
   public FeatureCollection withHandle(final String handle) {
     setHandle(handle);
+    return this;
+  }
+
+  /**
+   * Returns the Space nextPageToken which is used to iterate above data.
+   *
+   * @return the nextPageToken.
+   */
+  public String getNextPageToken() {
+    return this.nextPageToken;
+  }
+
+  /**
+   * Sets the Space nextPageToken that can be used to continue an iterate.
+   *
+   * @param nextPageToken the nextPageToken, if null the nextPageToken property is removed.
+   */
+  @SuppressWarnings("WeakerAccess")
+  public void setNextPageToken(String nextPageToken) {
+    this.nextPageToken = nextPageToken;
+  }
+
+  @SuppressWarnings("unused")
+  public FeatureCollection withNextPageToken(final String nextPageToken) {
+    setNextPageToken(nextPageToken);
+    return this;
+  }
+
+  /**
+   * Returns true if FeatureCollection does not contain all results. Is used for tweaks.
+   *
+   * @return the handle.
+   */
+  public Boolean isPartial() {
+    return this.partial;
+  }
+
+  /**
+   * Set indication if FeatureCollection has all expected results or not.
+   *
+   * @param partial is true if FeatureCollection does not contains all data.
+   */
+  @SuppressWarnings("WeakerAccess")
+  public void setPartial(Boolean partial) {
+    this.partial = partial;
+  }
+
+  @SuppressWarnings("unused")
+  public FeatureCollection withPartial(final Boolean partial) {
+    setPartial(partial);
     return this;
   }
 
@@ -180,6 +241,7 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
    *
    * @return the amount of features that are matching the query.
    */
+  @Deprecated
   public Long getCount() {
     return this.count;
   }
@@ -189,11 +251,13 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
    *
    * @param count the amount of features that where matching a query, if null, then the property is removed.
    */
+  @Deprecated
   @SuppressWarnings("WeakerAccess")
   public void setCount(Long count) {
     this.count = count;
   }
 
+  @Deprecated
   @SuppressWarnings("unused")
   public FeatureCollection withCount(final Long count) {
     setCount(count);
@@ -284,6 +348,25 @@ public class FeatureCollection extends XyzResponse<FeatureCollection> {
   @SuppressWarnings("unused")
   public FeatureCollection withFailed(List<ModificationFailure> failed) {
     setFailed(failed);
+    return this;
+  }
+
+  /**
+   * For FeatureCollection write-responses:
+   *  If this FeatureCollection is a response to a modification of the space it contains the (new) space-version which
+   *  has just been written.
+   * @return The new space-version after some modification
+   */
+  public Long getVersion() {
+    return version;
+  }
+
+  public void setVersion(long version) {
+    this.version = version;
+  }
+
+  public FeatureCollection withVersion(long version) {
+    setVersion(version);
     return this;
   }
 

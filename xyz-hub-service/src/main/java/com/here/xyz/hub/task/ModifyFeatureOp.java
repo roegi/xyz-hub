@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,84 +19,148 @@
 
 package com.here.xyz.hub.task;
 
-import com.google.common.base.Objects;
+import static com.here.xyz.hub.task.FeatureTask.FeatureKey.AUTHOR;
+import static com.here.xyz.hub.task.FeatureTask.FeatureKey.CREATED_AT;
+import static com.here.xyz.hub.task.FeatureTask.FeatureKey.PROPERTIES;
+import static com.here.xyz.hub.task.FeatureTask.FeatureKey.SPACE;
+import static com.here.xyz.hub.task.FeatureTask.FeatureKey.UPDATED_AT;
+import static com.here.xyz.hub.task.FeatureTask.FeatureKey.VERSION;
+
 import com.here.xyz.XyzSerializable;
-import com.here.xyz.hub.util.diff.Difference;
-import com.here.xyz.hub.util.diff.Patcher;
+import com.here.xyz.hub.task.ModifyFeatureOp.FeatureEntry;
 import com.here.xyz.models.geojson.implementation.Feature;
-import io.vertx.core.json.Json;
+import com.here.xyz.models.geojson.implementation.XyzNamespace;
+import com.here.xyz.models.hub.FeatureModificationList.ConflictResolution;
+import com.here.xyz.models.hub.FeatureModificationList.IfExists;
+import com.here.xyz.models.hub.FeatureModificationList.IfNotExists;
+import com.here.xyz.util.service.HttpException;
+import io.netty.handler.codec.http.HttpResponseStatus;
+import io.vertx.core.json.JsonObject;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import javax.annotation.concurrent.ThreadSafe;
+import java.util.stream.Collectors;
 
-@ThreadSafe
-public class ModifyFeatureOp extends ModifyOp<Feature, Feature, Feature> {
+public class ModifyFeatureOp extends ModifyOp<Feature, FeatureEntry> {
 
-  public ModifyFeatureOp(List<Feature> inputStates, IfNotExists ifNotExists, IfExists ifExists, boolean isTransactional) {
-    super(inputStates, ifNotExists, ifExists, isTransactional);
+  private final static String ON_FEATURE_NOT_EXISTS = "onFeatureNotExists";
+  private final static String ON_FEATURE_EXISTS = "onFeatureExists";
+  private final static String ON_MERGE_CONFLICT = "onMergeConflict";
+
+  public ModifyFeatureOp(List<FeatureEntry> featureEntries, boolean isTransactional) {
+    super(featureEntries, isTransactional);
   }
 
-  @Override
-  public Feature patch(Feature headState, Feature editedState, Feature inputState) throws ModifyOpError {
-    final Map<String, Object> editedStateMap = editedState.asMap();
+  /**
+   * Converts a list of feature modifications input into a list of FeatureEntry where which entry contains information on how to handle
+   * when the feature exists, not exists or conflict cases.
+   * @param featureModifications A list of FeatureModifications of which each may have different settings for existence-handling and/or
+   *  conflict-handling. If these settings are not specified at the FeatureModification the according other parameters (ifNotExists,
+   *  ifExists, conflictResolution) of this constructor will be applied for that purpose.
+   * @param ifNotExists defines the action in case the feature does not exist, possible values are available at {@link IfNotExists}
+   * @param ifExists defines the action in case the feature already exists, possible values are available at {@link IfExists}
+   * @param conflictResolution defines the action in case there is a conflict when processing the feature, possible values are available at {@link ConflictResolution}
+   * @return the list of feature entries, which can be empty
+   * @throws HttpException in case the parameters ifExists, ifNotExists and conflictResolution extracted from the featureModification contains invalid values
+   */
+  public static List<FeatureEntry> convertToFeatureEntries(List<Map<String, Object>> featureModifications, IfNotExists ifNotExists, IfExists ifExists, ConflictResolution conflictResolution)
+      throws HttpException {
+    if (featureModifications == null)
+      return Collections.emptyList();
 
-    final Difference diff = Patcher.calculateDifferenceOfPartialUpdate(editedStateMap, inputState.asMap(), null, true);
-    Patcher.patch(editedStateMap, diff);
-    return merge(headState, editedState, XyzSerializable.fromMap(editedStateMap, Feature.class));
-  }
+    final List<FeatureEntry> result = new ArrayList<>();
+    for (Map<String, Object> fm : featureModifications) {
+      IfNotExists ne =
+          fm.get(ON_FEATURE_NOT_EXISTS) instanceof String ? IfNotExists.from((String) fm.get(ON_FEATURE_NOT_EXISTS)) : ifNotExists;
+      IfExists e = fm.get(ON_FEATURE_EXISTS) instanceof String ? IfExists.from((String) fm.get(ON_FEATURE_EXISTS)) : ifExists;
+      ConflictResolution cr = fm.get(ON_MERGE_CONFLICT) instanceof String ?
+          ConflictResolution.from((String) fm.get(ON_MERGE_CONFLICT)) : conflictResolution;
 
-  @Override
-  public Feature merge(Feature headState, Feature editedState, Feature inputState) throws ModifyOpError {
-    if (equalStates(editedState, headState)) {
-      return replace(headState, inputState);
+      List<String> featureIds = (List<String>) fm.get("featureIds");
+      Map<String, Object> featureCollection = (Map<String, Object>) fm.get("featureData");
+      List<Map<String, Object>> features = new ArrayList<>();
+
+      if (featureCollection != null)
+          features.addAll((List<Map<String, Object>>) featureCollection.get("features"));
+
+      if (featureIds != null)
+        features.addAll(idsToFeatures(featureIds));
+
+      result.addAll(features.stream().map(feature -> new FeatureEntry(feature, ne, e, cr)).collect(Collectors.toList()));
     }
 
-    final Map<String, Object> editedStateMap = editedState.asMap();
-    final Difference diffInput = Patcher.getDifference(editedStateMap, inputState.asMap());
-    final Difference diffHead = Patcher.getDifference(editedStateMap, headState.asMap());
-    try {
-      final Difference mergedDiff = Patcher.mergeDifferences(diffInput, diffHead);
-      Patcher.patch(editedStateMap, mergedDiff);
-      return XyzSerializable.fromMap(editedStateMap, Feature.class);
-    } catch (Exception e) {
-      throw new ModifyOpError(e.getMessage());
-    }
+    return result;
   }
 
-  @Override
-  public Feature replace(Feature headState, Feature inputState) throws ModifyOpError {
-    if (getUuid(inputState) != null && !Objects.equal(getUuid(inputState), getUuid(headState) != null)) {
-      throw new ModifyOpError(
-          "The feature with id " + headState.getId() + " cannot be replaced. The provided UUID doesn't match the UUID of the head state: "+ getUuid(headState));
-    }
-    return inputState.copy();
+  private static List<Map<String, Object>> idsToFeatures(List<String> featureIds) {
+    return featureIds.stream().map(fId -> new JsonObject().put("id", fId).getMap()).collect(Collectors.toList());
   }
 
-  @Override
-  public Feature create(Feature inputState) {
-    return inputState.copy();
-  }
-
-  @Override
-  public Feature transform(Feature sourceState) {
-    return sourceState;
-  }
-
-  private String getUuid(Feature feature) {
-    if (feature == null || feature.getProperties() == null || feature.getProperties().getXyzNamespace() == null) {
-      return null;
-    }
-    return feature.getProperties().getXyzNamespace().getUuid();
-  }
-
-  @Override
-  public boolean equalStates(Feature state1, Feature state2) {
-    if( Objects.equal(state1, state2) ) {
-      return true;
+  public static class FeatureEntry extends ModifyOp.Entry<Feature> {
+    public FeatureEntry(Map<String, Object> input, IfNotExists ifNotExists, IfExists ifExists, ConflictResolution cr) {
+      super(input, ifNotExists, ifExists, cr);
     }
 
-    // TODO: Move to Feature#equals()
-    Difference diff = Patcher.getDifference(Json.mapper.convertValue(state1, Map.class), Json.mapper.convertValue(state2, Map.class));
-    return diff == null;
+    @Override
+    public Feature fromMap(Map<String, Object> map) throws ModifyOpError, HttpException {
+      try {
+        return XyzSerializable.fromMap(map, Feature.class);
+      } catch (Exception e) {
+        try {
+          throw new HttpException(HttpResponseStatus.BAD_REQUEST,
+              "Unable to create a Feature from the provided input: " + XyzSerializable.serialize(map));
+        }
+        catch (Exception jsonProcessingException) {
+          throw new HttpException(HttpResponseStatus.BAD_REQUEST,
+              "Unable to create a Feature from the provided input. id: " + map.get("id") + ", type: " + map.get("type"));
+        }
+      }
+    }
+
+    @Override
+    public Map<String, Object> toMap(Feature record) throws ModifyOpError, HttpException {
+      return filterMetadata(record.toMap());
+    }
+
+    @Override
+    protected long getVersion(Map<String, Object> feature) {
+      try {
+        return new JsonObject(feature).getJsonObject(PROPERTIES).getJsonObject(XyzNamespace.XYZ_NAMESPACE).getLong(VERSION, -1L);
+      }
+      catch (Exception e) {
+        return -1;
+      }
+    }
+
+    @Override
+    protected long getVersion(Feature input) {
+      try {
+        return input.getProperties().getXyzNamespace().getVersion();
+      } catch (Exception e) {
+        return -1;
+      }
+    }
+
+    public String getId(Feature record) {
+      return record == null ? null : record.getId();
+    }
+
+    @Override
+    public Map<String, Object> filterMetadata(Map<String, Object> map) {
+      return filter(map, metadataFilter);
+    }
+
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> metadataFilter = new JsonObject()
+        .put(PROPERTIES, new JsonObject()
+            .put(XyzNamespace.XYZ_NAMESPACE,
+                new JsonObject()
+                    .put(SPACE, true)
+                    .put(CREATED_AT, true)
+                    .put(UPDATED_AT, true)
+                    .put(VERSION, true)
+                    .put(AUTHOR, true))
+        ).mapTo(Map.class);
   }
 }

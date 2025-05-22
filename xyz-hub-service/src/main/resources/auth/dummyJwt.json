@@ -25,6 +25,9 @@
       "accessConnectors": [
         {}
       ],
+      "manageConnectors": [
+        {}
+      ],
       "useCapabilities": [
         {}
       ],
@@ -34,6 +37,7 @@
     }
   },
   "aid": "ANONYMOUS",
+  "skipAuth": true,
   "iat": 1577833200,
   "exp": 2000000000
 }

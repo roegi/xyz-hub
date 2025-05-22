@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2024 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +22,11 @@ package com.here.xyz.models.geojson;
 import com.here.xyz.models.geojson.coordinates.BBox;
 import com.here.xyz.models.geojson.coordinates.JTSHelper;
 import com.here.xyz.models.geojson.declaration.ILonLat;
-import com.vividsolutions.jts.geom.Envelope;
-import com.vividsolutions.jts.geom.prep.PreparedGeometry;
-import com.vividsolutions.jts.geom.prep.PreparedGeometryFactory;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.locationtech.jts.geom.Envelope;
+import org.locationtech.jts.geom.prep.PreparedGeometry;
+import org.locationtech.jts.geom.prep.PreparedGeometryFactory;
 
 /**
  * A class that represents a Web Mercator Tile with additional helper methods to perform calculations with Web Mercator projection.
@@ -58,6 +58,9 @@ public class WebMercatorTile {
    * Maximal longitude for Web Mercator projection.
    */
   public static final double MaxLongitude = 180;
+
+  public static final int TileSizeInPixel = 256;
+
   private static final Pattern QUADKEY_REGEXP = Pattern.compile("[0-3]*");
   private static final Pattern QUADPIXEL_REGEXP = Pattern.compile("([0-9]*)_([0-9]*)_([0-9]*)");
   private static final int MAX_LEVEL = 20; // Why 20 and not 23?
@@ -529,7 +532,7 @@ public class WebMercatorTile {
       return bbox;
     }
 
-    long TILE_SIZE_IN_PIXEL = 256;
+    long TILE_SIZE_IN_PIXEL = TileSizeInPixel;
     double bufferRelative = (double) buffer / (double) TILE_SIZE_IN_PIXEL;
 
     double mapSize = 1 << level;

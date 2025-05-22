@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2021 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,72 +19,198 @@
 
 package com.here.xyz.hub.connectors;
 
+import static com.google.common.net.HttpHeaders.ACCEPT_ENCODING;
+import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
+import static com.google.common.net.HttpHeaders.USER_AGENT;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.STREAM_ID;
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.GATEWAY_TIMEOUT;
+import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 
+import com.google.common.base.Strings;
 import com.here.xyz.hub.Service;
 import com.here.xyz.hub.connectors.models.Connector;
-import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig.HTTP;
-import com.here.xyz.hub.rest.HttpException;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig;
+import com.here.xyz.hub.connectors.models.Connector.RemoteFunctionConfig.Http;
+import com.here.xyz.util.service.Core;
+import com.here.xyz.util.service.HttpException;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.ext.web.client.WebClient;
-import io.vertx.ext.web.client.WebClientOptions;
-import java.io.IOException;
+import io.vertx.core.http.HttpClient;
+import io.vertx.core.http.HttpClientOptions;
+import io.vertx.core.http.HttpMethod;
+import io.vertx.core.http.RequestOptions;
+import io.vertx.core.net.impl.ConnectionBase;
+import java.net.URL;
+import java.nio.charset.Charset;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
-import org.slf4j.Marker;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.Marker;
 
-public class HTTPFunctionClient extends QueueingRemoteFunctionClient implements Logging {
+public class HTTPFunctionClient extends RemoteFunctionClient {
 
-  private volatile WebClient webClient;
-  private static volatile String url;
+  private static final Logger logger = LogManager.getLogger();
+  private volatile String url;
+  private int requestTimeout;
 
-  public HTTPFunctionClient(Connector connectorConfig) {
+  private static HttpClient httpClient = Core.vertx.createHttpClient(
+      new HttpClientOptions()
+        .setMaxPoolSize(Service.configuration.MAX_GLOBAL_HTTP_CLIENT_CONNECTIONS)
+        .setHttp2MaxPoolSize(Service.configuration.MAX_GLOBAL_HTTP_CLIENT_CONNECTIONS)
+        .setTcpKeepAlive(Service.configuration.HTTP_CLIENT_TCP_KEEPALIVE)
+        .setIdleTimeout(Service.configuration.HTTP_CLIENT_IDLE_TIMEOUT)
+        .setTcpQuickAck(true)
+        .setTcpFastOpen(true)
+        .setPipelining(Service.configuration.HTTP_CLIENT_PIPELINING))
+      /*.connectionHandler(HTTPFunctionClient::newConnectionCreated)*/;
+
+  HTTPFunctionClient(Connector connectorConfig) {
     super(connectorConfig);
-    if (!(connectorConfig.remoteFunction instanceof Connector.RemoteFunctionConfig.HTTP)) {
+  }
+
+  @Override
+  synchronized void setConnectorConfig(final Connector newConnectorConfig) throws NullPointerException, IllegalArgumentException {
+    super.setConnectorConfig(newConnectorConfig);
+    if (!(getConnectorConfig().getRemoteFunction() instanceof Http))
       throw new IllegalArgumentException("Invalid remoteFunctionConfig argument, must be an instance of HTTP");
+    final Http remoteFunction = (Http) getConnectorConfig().getRemoteFunction();
+    url = remoteFunction.url.toString();
+    requestTimeout = remoteFunction.getTimeout();
+    HttpFunctionRegistry.register(getConnectorConfig());
+  }
+
+  @Override
+  void destroy() {
+    super.destroy();
+  }
+
+  protected void invoke(FunctionCall fc, Handler<AsyncResult<byte[]>> callback) {
+    final RemoteFunctionConfig remoteFunction = getConnectorConfig().getRemoteFunction();
+    logger.info(fc.marker, "Invoke http remote function '{}' URL is: {} Event size is: {}",
+        remoteFunction.id, url, fc.getByteSize());
+
+    try {
+      //The BodyHolder makes sure that our "onSuccess-lambda" below won't keep a reference to the body itself
+      BodyHolder bh = new BodyHolder(Buffer.buffer(fc.bytes));
+
+      httpClient.request(new RequestOptions()
+          .setMethod(HttpMethod.POST)
+          .setTimeout(requestTimeout)
+          .putHeader(CONTENT_TYPE, "application/json; charset=" + Charset.defaultCharset().name())
+          .putHeader(STREAM_ID, fc.marker.getName())
+          .putHeader(ACCEPT_ENCODING, "gzip")
+          .putHeader(USER_AGENT, Service.XYZ_HUB_USER_AGENT)
+          .setAbsoluteURI(url)
+      )
+          .onSuccess(req -> {
+            req.exceptionHandler(t -> handleFailure(fc.marker, callback, t));
+            req.send(bh.body)
+                .onSuccess(response -> {
+                  if (fc.fireAndForget) return;
+                  try {
+                    validateHttpStatus(response.statusCode(), response.statusMessage());
+                    response.body(ar -> {
+                      if (ar.failed())
+                        handleFailure(fc.marker, callback, ar.cause());
+                      else {
+                        try {
+                          byte[] responseBytes = ar.result().getBytes();
+                          if (responseBytes == null || responseBytes.length == 0)
+                            throw new HttpException(BAD_GATEWAY, "Response body from remote HTTP connector service was empty.");
+                          callback.handle(Future.succeededFuture(responseBytes));
+                        }
+                        catch (Exception e) {
+                          handleFailure(fc.marker, callback, new HttpException(BAD_GATEWAY, "Error while handling response of HTTP connector.", e));
+                        }
+                      }
+                    });
+                  }
+                  catch (Exception e) {
+                    handleFailure(fc.marker, callback, e);
+                  }
+                })
+                .onFailure(t -> handleFailure(fc.marker, callback, t));
+            bh.body = null; //Make sure this lambda-expression is not referencing the request-body anymore
+          })
+          .onFailure(t -> handleFailure(fc.marker, callback, t));
+    }
+    catch (Exception e) {
+      handleFailure(fc.marker, callback, e);
+    }
+  }
+
+  private static class BodyHolder {
+    private BodyHolder(Buffer body) {
+      this.body = body;
+    }
+    private Buffer body;
+  }
+
+  private void validateHttpStatus(int statusCode, String statusMessage) throws HttpException {
+    if (statusCode != OK.code()) {
+      HttpResponseStatus upstreamStatus = Strings.isNullOrEmpty(statusMessage) ?
+          HttpResponseStatus.valueOf(statusCode) : new HttpResponseStatus(statusCode, statusMessage);
+      HttpException upstreamHttpEx = new HttpException(upstreamStatus, "Remote HTTP connector service responded with: " + upstreamStatus);
+      if (upstreamStatus.equals(GATEWAY_TIMEOUT))
+        throw upstreamHttpEx;
+      throw new HttpException(BAD_GATEWAY, "Remote HTTP connector service did not respond with 200(OK)", upstreamHttpEx);
+    }
+  }
+
+  private void handleFailure(Marker marker, Handler<AsyncResult<byte[]>> callback, Throwable t) {
+    if (t == ConnectionBase.CLOSED_EXCEPTION)
+      //Re-attach a stack-trace until here
+      t = new RuntimeException("Connection was already closed.", t);
+    logger.warn(marker, "Error while calling remote HTTP service", t);
+    if (t instanceof TimeoutException)
+      t = new HttpException(GATEWAY_TIMEOUT, "Connector timeout error.", t);
+    if (!(t instanceof HttpException))
+      t = new HttpException(BAD_GATEWAY, "Connector error.", t);
+    callback.handle(Future.failedFuture(t));
+  }
+
+  public static class HttpFunctionRegistry {
+
+    private static final Map<String, String> connectorIdByUrl = new ConcurrentHashMap<>();
+    private static final Map<String, String> connectorIdByHost = new ConcurrentHashMap<>();
+    private static final Map<String, Boolean> metricsActiveByConnectorId = new ConcurrentHashMap<>();
+
+    private static void register(Connector connector) {
+      Http remoteFunction = (Http) connector.getRemoteFunction();
+      URL url = remoteFunction.url;
+      connectorIdByUrl.put(url.toString(), connector.id);
+      connectorIdByHost.put(url.getHost() + ":" + (url.getPort() == -1 ? url.getDefaultPort() : url.getPort()), connector.id);
+      metricsActiveByConnectorId.put(connector.id, remoteFunction.metricsActive);
     }
 
-    updateStorageConfig();
+    /**
+     * Returns, if possible, the matching connector ID for the specified HTTP URL.
+     * @param url
+     * @return The connector ID or null
+     */
+    public static String getConnectorIdByUrl(String url) {
+      return connectorIdByUrl.get(url);
+    }
+
+    /**
+     * Returns, if possible, the matching connector ID for the specified hostname & port combination.
+     * @param hostname
+     * @param port
+     * @return The connector ID or null
+     */
+    public static String getConnectorIdByHostAndPort(String hostname, int port) {
+      return connectorIdByHost.get(hostname + ":" + port);
+    }
+
+    public static boolean isMetricsActive(String connectorId) {
+      return metricsActiveByConnectorId.getOrDefault(connectorId, false);
+    }
   }
 
-  @Override
-  protected void updateStorageConfig() {
-    super.updateStorageConfig();
-    HTTP remoteFunctionConfig = (HTTP) connectorConfig.remoteFunction;
-    url = remoteFunctionConfig.url.toString();
-    webClient = WebClient.create(Service.vertx, new WebClientOptions()
-        .setUserAgent(Service.XYZ_HUB_USER_AGENT)
-        .setMaxPoolSize(getMaxConnections()));
-  }
-
-  @Override
-  protected void invoke(Marker marker, byte[] bytes, Handler<AsyncResult<byte[]>> callback) {
-    logger().debug(marker, "Invoke http remote function '{}' Event size is: {}", connectorConfig.remoteFunction.id, bytes.length);
-
-    webClient.post(url)
-        .timeout(REQUEST_TIMEOUT)
-        .sendBuffer(Buffer.buffer(bytes), ar -> {
-          if (ar.failed()) {
-            if (ar.cause() instanceof TimeoutException) {
-              callback.handle(Future.failedFuture(new HttpException(GATEWAY_TIMEOUT, "Connector timeout error.")));
-            }
-            else {
-              callback.handle(Future.failedFuture(ar.cause()));
-            }
-          }
-          else {
-            try {
-              //TODO: Refactor to move decompression into the base-class RemoteFunctionClient as it's not HTTP specific
-              byte[] responseBytes = ar.result().body().getBytes();
-              checkResponseSize(responseBytes);
-              callback.handle(Future.succeededFuture(getDecompressed(responseBytes)));
-            } catch (IOException | HttpException e) {
-              callback.handle(Future.failedFuture(e));
-            }
-          }
-        });
-  }
 }

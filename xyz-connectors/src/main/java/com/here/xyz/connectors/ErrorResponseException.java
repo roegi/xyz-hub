@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,30 +19,60 @@
 
 package com.here.xyz.connectors;
 
-import com.here.xyz.models.geojson.implementation.XyzError;
+import static com.here.xyz.responses.XyzError.EXCEPTION;
+
 import com.here.xyz.responses.ErrorResponse;
+import com.here.xyz.responses.XyzError;
 
 /**
- * An exception, which contains an ErrorResponse object.
+ * An exception, which will cause the connector to respond with an ErrorResponse object.
  */
 public class ErrorResponseException extends Exception {
 
   private ErrorResponse errorResponse;
 
-  public ErrorResponseException(String streamId, XyzError xyzError, String errorMessage) {
+  public ErrorResponseException(XyzError xyzError, String errorMessage) {
     super(errorMessage);
-    this.errorResponse = new ErrorResponse()
-        .withStreamId(streamId)
-        .withError(xyzError)
-        .withErrorMessage(errorMessage);
+    createErrorResponse(xyzError, errorMessage);
   }
 
-  public ErrorResponseException(String streamId, XyzError xyzError, Exception e) {
-    super(e);
+  public ErrorResponseException(ErrorResponse errorResponse) {
+    super(errorResponse.getErrorMessage());
+    this.errorResponse = errorResponse;
+  }
+
+  public ErrorResponseException(Exception cause) {
+    super(cause);
+    createErrorResponse(EXCEPTION, cause.getMessage());
+  }
+
+  public ErrorResponseException(XyzError xyzError, Exception cause) {
+    super(cause);
+    createErrorResponse(xyzError, cause.getMessage());
+  }
+
+  public ErrorResponseException(XyzError xyzError, String errorMessage, Exception cause) {
+    super(errorMessage, cause);
+    createErrorResponse(xyzError, errorMessage);
+  }
+
+  /**
+   * @deprecated Please use constructor without stream ID (see above).
+   *  The stream ID will be attached just before the ErrorResponse is being sent.
+   * @param streamId
+   * @param xyzError
+   * @param errorMessage
+   */
+  @Deprecated
+  public ErrorResponseException(String streamId, XyzError xyzError, String errorMessage) {
+    super(errorMessage);
+    createErrorResponse(xyzError, errorMessage);
+  }
+
+  private void createErrorResponse(XyzError xyzError, String errorMessage) {
     this.errorResponse = new ErrorResponse()
-        .withStreamId(streamId)
         .withError(xyzError)
-        .withErrorMessage(e.getMessage());
+        .withErrorMessage(errorMessage);
   }
 
   public ErrorResponse getErrorResponse() {

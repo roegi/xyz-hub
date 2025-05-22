@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2022 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,10 +26,9 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeName(value = "GetFeaturesByIdEvent")
 @SuppressWarnings({"WeakerAccess", "unused"})
-public final class GetFeaturesByIdEvent extends Event<GetFeaturesByIdEvent> {
+public final class GetFeaturesByIdEvent extends SelectiveEvent<GetFeaturesByIdEvent> {
 
   private List<String> ids;
-  private List<String> selection;
 
   public List<String> getIds() {
     return this.ids;
@@ -43,18 +42,4 @@ public final class GetFeaturesByIdEvent extends Event<GetFeaturesByIdEvent> {
     setIds(ids);
     return this;
   }
-
-  public List<String> getSelection() {
-    return this.selection;
-  }
-
-  public void setSelection(List<String> selection) {
-    this.selection = selection;
-  }
-
-  public GetFeaturesByIdEvent withSelection(List<String> selection) {
-    setSelection(selection);
-    return this;
-  }
-
 }

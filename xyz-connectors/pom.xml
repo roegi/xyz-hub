@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (C) 2017-2019 HERE Europe B.V.
+  ~ Copyright (C) 2017-2023 HERE Europe B.V.
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@
   <parent>
     <groupId>com.here.xyz</groupId>
     <artifactId>xyz-hub</artifactId>
-    <relativePath>../</relativePath>
-    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+    <version>3.17.12-SNAPSHOT</version>
   </parent>
 
   <licenses>
@@ -43,18 +43,27 @@
   <packaging>jar</packaging>
 
   <dependencies>
-    <dependency>
-      <artifactId>aws-lambda-java-core</artifactId>
-      <groupId>com.amazonaws</groupId>
-    </dependency>
+    <!-- XYZ libraries -->
     <dependency>
       <artifactId>xyz-models</artifactId>
       <groupId>${project.groupId}</groupId>
     </dependency>
     <dependency>
-      <artifactId>aws-java-sdk-s3</artifactId>
+      <artifactId>xyz-util</artifactId>
+      <groupId>${project.groupId}</groupId>
+    </dependency>
+
+    <!-- AWS SDK -->
+    <dependency>
+      <artifactId>aws-lambda-java-core</artifactId>
       <groupId>com.amazonaws</groupId>
     </dependency>
+    <dependency>
+      <artifactId>aws-java-sdk-lambda</artifactId>
+      <groupId>com.amazonaws</groupId>
+    </dependency>
+
+    <!-- PSQL JDBC driver -->
     <dependency>
       <artifactId>postgresql</artifactId>
       <groupId>org.postgresql</groupId>
@@ -63,14 +72,33 @@
       <artifactId>commons-dbutils</artifactId>
       <groupId>commons-dbutils</groupId>
     </dependency>
+
+    <!-- Logging libraries -->
     <dependency>
-      <artifactId>junit</artifactId>
-      <groupId>junit</groupId>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- Util -->
+    <dependency>
+      <groupId>net.jodah</groupId>
+      <artifactId>expiringmap</artifactId>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <artifactId>junit-jupiter-api</artifactId>
+      <groupId>org.junit.jupiter</groupId>
       <scope>test</scope>
     </dependency>
     <dependency>
-      <artifactId>slf4j-simple</artifactId>
-      <groupId>org.slf4j</groupId>
+      <groupId>org.junit.vintage</groupId>
+      <artifactId>junit-vintage-engine</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

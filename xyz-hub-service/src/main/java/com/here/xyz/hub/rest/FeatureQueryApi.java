@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,82 +19,79 @@
 
 package com.here.xyz.hub.rest;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_VND_MAPBOX_VECTOR_TILE;
+import static com.here.xyz.events.GetFeaturesByTileEvent.ResponseType.GEO_JSON;
+import static com.here.xyz.events.GetFeaturesByTileEvent.ResponseType.MVT;
+import static com.here.xyz.events.GetFeaturesByTileEvent.ResponseType.MVT_FLATTENED;
+import static com.here.xyz.hub.rest.ApiParam.Query.FAST_MODE;
+import static com.here.xyz.hub.rest.ApiParam.Query.FORCE_2D;
 import static com.here.xyz.hub.rest.ApiParam.Query.SKIP_CACHE;
+import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_VND_MAPBOX_VECTOR_TILE;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.here.xyz.Typed;
 import com.here.xyz.XyzSerializable;
-import com.here.xyz.events.CountFeaturesEvent;
+import com.here.xyz.events.ContextAwareEvent.SpaceContext;
 import com.here.xyz.events.GetFeaturesByBBoxEvent;
 import com.here.xyz.events.GetFeaturesByGeometryEvent;
 import com.here.xyz.events.GetFeaturesByTileEvent;
 import com.here.xyz.events.GetStatisticsEvent;
 import com.here.xyz.events.IterateFeaturesEvent;
+import com.here.xyz.events.PropertiesQuery;
 import com.here.xyz.events.SearchForFeaturesEvent;
+import com.here.xyz.hub.Service;
 import com.here.xyz.hub.rest.ApiParam.Path;
 import com.here.xyz.hub.rest.ApiParam.Query;
 import com.here.xyz.hub.task.FeatureTask;
 import com.here.xyz.hub.task.FeatureTask.BBoxQuery;
-import com.here.xyz.hub.task.FeatureTask.CountQuery;
 import com.here.xyz.hub.task.FeatureTask.GeometryQuery;
 import com.here.xyz.hub.task.FeatureTask.GetStatistics;
 import com.here.xyz.hub.task.FeatureTask.IterateQuery;
 import com.here.xyz.hub.task.FeatureTask.SearchQuery;
 import com.here.xyz.hub.task.FeatureTask.TileQuery;
-import com.here.xyz.hub.util.geo.GeoTools;
+import com.here.xyz.util.geo.GeoTools;
 import com.here.xyz.models.geojson.HQuad;
 import com.here.xyz.models.geojson.WebMercatorTile;
 import com.here.xyz.models.geojson.coordinates.BBox;
 import com.here.xyz.models.geojson.exceptions.InvalidGeometryException;
 import com.here.xyz.models.geojson.implementation.Geometry;
+import com.here.xyz.models.hub.Ref;
+import com.here.xyz.util.geo.GeometryValidator;
+import com.here.xyz.util.service.HttpException;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.ext.web.ParsedHeaderValue;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.api.contract.openapi3.OpenAPI3RouterFactory;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.io.IOException;
 import java.util.List;
-import org.slf4j.Marker;
 
-public class FeatureQueryApi extends Api {
+public class FeatureQueryApi extends SpaceBasedApi {
 
-  /**
-   * The default limit for the number of features to load from the connector.
-   */
-  private final static int DEFAULT_FEATURE_LIMIT = 30_000;
-  private final static int MIN_LIMIT = 1;
-  private final static int HARD_LIMIT = 100_000;
-
-  public FeatureQueryApi(OpenAPI3RouterFactory routerFactory) {
-    routerFactory.addHandlerByOperationId("getFeaturesBySpatial", this::getFeaturesBySpatial);
-    routerFactory.addHandlerByOperationId("getFeaturesBySpatialPost", this::getFeaturesBySpatial);
-    routerFactory.addHandlerByOperationId("getFeaturesByBBox", this::getFeaturesByBBox);
-    routerFactory.addHandlerByOperationId("getFeaturesByTile", this::getFeaturesByTile);
-    routerFactory.addHandlerByOperationId("getFeaturesCount", this::getFeaturesCount);
-    routerFactory.addHandlerByOperationId("getStatistics", this::getStatistics);
-    routerFactory.addHandlerByOperationId("iterateFeatures", this::iterateFeatures);
-    routerFactory.addHandlerByOperationId("searchForFeatures", this::searchForFeatures);
-  }
-
-  /**
-   * Retrieves the count of features in the space.
-   */
-  @Deprecated
-  private void getFeaturesCount(final RoutingContext context) {
-    CountFeaturesEvent event = new CountFeaturesEvent()
-        .withTags(Query.getTags(context));
-    new CountQuery(event, context, ApiResponseType.COUNT_RESPONSE)
-        .execute(this::sendResponse, this::sendErrorResponse);
+  public FeatureQueryApi(RouterBuilder rb) {
+    rb.getRoute("getFeaturesBySpatial").setDoValidation(false).addHandler(this::getFeaturesBySpatial);
+    rb.getRoute("getFeaturesBySpatialPost").setDoValidation(false).addHandler(this::getFeaturesBySpatial);
+    rb.getRoute("getFeaturesByBBox").setDoValidation(false).addHandler(this::getFeaturesByBBox);
+    rb.getRoute("getFeaturesByTile").setDoValidation(false).addHandler(this::getFeaturesByTile);
+    rb.getRoute("getStatistics").setDoValidation(false).addHandler(this::getStatistics);
+    rb.getRoute("iterateFeatures").setDoValidation(false).addHandler(this::iterateFeatures);
+    rb.getRoute("searchForFeatures").setDoValidation(false).addHandler(this::searchForFeatures);
   }
 
   /**
    * Retrieves the statistics about a space.
    */
   private void getStatistics(final RoutingContext context) {
-    new GetStatistics(new GetStatisticsEvent(), context, ApiResponseType.STATISTICS_RESPONSE, Query.getBoolean(context, SKIP_CACHE, false))
-        .execute(this::sendResponse, this::sendErrorResponse);
+    try {
+      new GetStatistics(new GetStatisticsEvent()
+                .withContext(getSpaceContext(context))
+                .withFastMode(Query.getBoolean(context, FAST_MODE, false)),
+              context,
+              ApiResponseType.STATISTICS_RESPONSE, Query.getBoolean(context, SKIP_CACHE, false)
+      ).execute(this::sendResponse, this::sendErrorResponse);
+    } catch (HttpException e) {
+      sendErrorResponse(context, e);
+    }
   }
 
   /**
@@ -102,17 +99,35 @@ public class FeatureQueryApi extends Api {
    */
   private void searchForFeatures(final RoutingContext context) {
     try {
-      SearchForFeaturesEvent event = new SearchForFeaturesEvent();
-      event.withLimit(getLimit(context))
-          .withTags(Query.getTags(context))
-          .withPropertiesQuery(Query.getPropertiesQuery(context))
-          .withSelection(Query.getSelection(context));
-      final SearchQuery task = new SearchQuery(event, context, ApiResponseType.FEATURE_COLLECTION,
-          Query.getBoolean(context, SKIP_CACHE, false));
+      final boolean skipCache = Query.getBoolean(context, SKIP_CACHE, false);
+      final boolean force2D = Query.getBoolean(context, FORCE_2D, false);
+      final PropertiesQuery propertiesQuery = getPropertiesQuery(context);
+      final SpaceContext spaceContext = getSpaceContext(context);
+      final String author = Query.getString(context, Query.AUTHOR, null);
+
+      final SearchForFeaturesEvent event = new SearchForFeaturesEvent();
+      event.withPropertiesQuery(propertiesQuery)
+          .withLimit(getLimit(context))
+          .withRef(getRef(context))
+          .withForce2D(force2D)
+          .withSelection(Query.getSelection(context))
+          .withContext(spaceContext)
+          .withAuthor(author);
+
+      final SearchQuery task = new SearchQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
       task.execute(this::sendResponse, this::sendErrorResponse);
     } catch (HttpException e) {
       sendErrorResponse(context, e);
     }
+  }
+
+  private PropertiesQuery getPropertiesQuery(final RoutingContext context) {
+    final PropertiesQuery propertiesQuery = Query.getPropertiesQuery(context);
+
+    if (propertiesQuery == null)
+      return null;
+
+    return propertiesQuery.filterOutNamedProperty(Query.F_PREFIX + Query.VERSION, Query.F_PREFIX + Query.AUTHOR);
   }
 
   /**
@@ -121,11 +136,43 @@ public class FeatureQueryApi extends Api {
   private void iterateFeatures(final RoutingContext context) {
     try {
       final boolean skipCache = Query.getBoolean(context, SKIP_CACHE, false);
+      final boolean force2D = Query.getBoolean(context, FORCE_2D, false);
+      final SpaceContext spaceContext = getSpaceContext(context);
+      final Integer v = Query.getInteger(context, Query.VERSION, null);
+      final Ref ref = getRef(context);
+
+      List<String> sort = Query.getSort(context);
+      PropertiesQuery propertiesQuery = Query.getPropertiesQuery(context);
+      String handle = Query.getString(context, Query.HANDLE, null);
+      Integer[] part = Query.getPart(context);
+
+      //TODO: Streamline the following IterateFeaturesEvent creation
+      if (sort != null || propertiesQuery != null || part != null || ( handle != null && handle.startsWith("h07~"))) {
+        IterateFeaturesEvent event = new IterateFeaturesEvent();
+        event.withLimit(getLimit(context))
+            .withForce2D(force2D)
+            .withSelection(Query.getSelection(context))
+            .withSort(sort)
+            .withPart(part)
+            .withHandle(handle)
+            .withContext(spaceContext)
+            .withRef(ref)
+            .withV(v);
+
+        final SearchQuery task = new SearchQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
+        task.execute(this::sendResponse, this::sendErrorResponse);
+        return;
+      }
+
       IterateFeaturesEvent event = new IterateFeaturesEvent()
           .withLimit(getLimit(context))
-          .withTags(Query.getTags(context))
+          .withForce2D(force2D)
           .withSelection(Query.getSelection(context))
-          .withHandle(Query.getString(context, Query.HANDLE, null));
+          .withRef(ref)
+          .withV(v)
+          .withHandle(Query.getString(context, Query.HANDLE, null))
+          .withContext(spaceContext);
+
       final IterateQuery task = new IterateQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
       task.execute(this::sendResponse, this::sendErrorResponse);
     } catch (HttpException e) {
@@ -140,6 +187,8 @@ public class FeatureQueryApi extends Api {
     try {
       final String refFeatureId = Query.getRefFeatureId(context);
       final String refSpaceId = Query.getRefSpaceId(context);
+      final String h3Index = Query.getH3Index(context);
+
       Geometry geometry = null;
 
       if(context.request().method() == HttpMethod.GET) {
@@ -149,25 +198,46 @@ public class FeatureQueryApi extends Api {
           throw new HttpException(BAD_REQUEST,e.getMessage());
         }
 
-        if(geometry != null && refFeatureId != null && refSpaceId !=null)
+        if(geometry == null && refFeatureId == null && refSpaceId == null && h3Index ==null)
           throw new HttpException(BAD_REQUEST, "Invalid arguments! Define '"+Query.LAT+"' and '"+Query.LON+"' OR reference a '"+Query.REF_FEATURE_ID+"' in a '"+Query.REF_SPACE_ID+"'!");
 
-        if(geometry == null && (refFeatureId == null || refSpaceId ==null))
-          throw new HttpException(BAD_REQUEST, "Invalid arguments! Define '"+Query.LAT+"' and '"+Query.LON+"' or reference a '"+Query.REF_FEATURE_ID+"' in a '"+Query.REF_SPACE_ID+"'!");
-      }else if(context.request().method() == HttpMethod.POST) {
+        if(geometry != null)
+          if(refFeatureId != null || refSpaceId != null || h3Index != null)
+            throw new HttpException(BAD_REQUEST, "Invalid arguments! Define '"+Query.LAT+"' and '"+Query.LON+"' or reference a '"+Query.REF_FEATURE_ID+"' in a '"+Query.REF_SPACE_ID+"'!");
+        if(refFeatureId != null || refSpaceId != null)
+          if(refFeatureId == null || refSpaceId == null || h3Index != null || geometry != null)
+            throw new HttpException(BAD_REQUEST, "Invalid arguments! Define '"+Query.LAT+"' and '"+Query.LON+"' or reference a '"+Query.REF_FEATURE_ID+"' in a '"+Query.REF_SPACE_ID+"'!");
+        if(h3Index != null)
+          if(refFeatureId != null || refSpaceId != null || geometry != null)
+            throw new HttpException(BAD_REQUEST, "Invalid arguments! Define '"+Query.LAT+"' and '"+Query.LON+"' or reference a '"+Query.REF_FEATURE_ID+"' in a '"+Query.REF_SPACE_ID+"'!");
+      } else if(context.request().method() == HttpMethod.POST) {
           geometry = getBodyAsGeometry(context);
       }
 
       final boolean skipCache = Query.getBoolean(context, SKIP_CACHE, false);
+      final boolean force2D = Query.getBoolean(context, FORCE_2D, false);
+      final SpaceContext spaceContext = getSpaceContext(context);
 
       GetFeaturesByGeometryEvent event = new GetFeaturesByGeometryEvent()
           .withGeometry(geometry)
           .withRadius(Query.getRadius(context))
+          .withH3Index(Query.getH3Index(context))
           .withLimit(getLimit(context))
-          .withTags(Query.getTags(context))
+          .withClip(Query.getBoolean(context, Query.CLIP, false))
           .withPropertiesQuery(Query.getPropertiesQuery(context))
-          .withSelection(Query.getSelection(context)
-          );
+          .withSelection(Query.getSelection(context))
+          .withForce2D(force2D)
+          .withContext(spaceContext)
+          .withRef(getRef(context));
+
+      try {
+        //If a h3 reference got provided - we do not need to validate the Geometry
+        //If there is a referenced feature - the geometry validation happens in FeatureTask - after the geometry is resolved.
+        if(h3Index == null && refFeatureId == null && refSpaceId == null)
+          GeometryValidator.validateGeometry(event.getGeometry(), event.getRadius());
+      }catch (GeometryValidator.GeometryException e){
+        throw new HttpException(BAD_REQUEST ,e.getMessage());
+      }
 
       final GeometryQuery task = new GeometryQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache, refSpaceId, refFeatureId);
       task.execute(this::sendResponse, this::sendErrorResponse);
@@ -182,17 +252,28 @@ public class FeatureQueryApi extends Api {
   private void getFeaturesByBBox(final RoutingContext context) {
     try {
       final boolean skipCache = Query.getBoolean(context, SKIP_CACHE, false);
-      GetFeaturesByBBoxEvent event = new GetFeaturesByBBoxEvent<>()
-          .withBbox(getBBox(context))
-          .withClip(Query.getBoolean(context, Query.CLIP, false));
+      final boolean clip = Query.getBoolean(context, Query.CLIP, false);
+      final boolean force2D = Query.getBoolean(context, FORCE_2D, false);
+      final SpaceContext spaceContext = getSpaceContext(context);
 
-      event.withClusteringType(Query.getString(context, Query.CLUSTERING, null))
-          .withClusteringParams(Query.getClusteringParams(context))
-          .withSimplificationLevel(Query.getInteger(context, Query.SIMPLIFICATION_LEVEL, -1))
-          .withLimit(getLimit(context))
-          .withTags(Query.getTags(context))
-          .withPropertiesQuery(Query.getPropertiesQuery(context))
-          .withSelection(Query.getSelection(context));
+      GetFeaturesByBBoxEvent event = (GetFeaturesByBBoxEvent) new GetFeaturesByBBoxEvent<>()
+          .withForce2D(force2D)
+          .withBbox(getBBox(context))
+          .withClip(clip);
+
+      try {
+        event.withClusteringType(Query.getString(context, Query.CLUSTERING, null))
+            .withClusteringParams(Query.getAdditionalParams(context,Query.CLUSTERING))
+            .withTweakType(Query.getString(context, Query.TWEAKS, null))
+            .withTweakParams(Query.getAdditionalParams(context, Query.TWEAKS))
+            .withPropertiesQuery(Query.getPropertiesQuery(context))
+            .withLimit(getLimit(context))
+            .withSelection(Query.getSelection(context))
+            .withRef(getRef(context))
+            .withContext(spaceContext);
+      } catch (Exception e) {
+        throw new HttpException(BAD_REQUEST,e.getMessage());
+      }
 
       final BBoxQuery task = new FeatureTask.BBoxQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
       task.execute(this::sendResponse, this::sendErrorResponse);
@@ -206,9 +287,13 @@ public class FeatureQueryApi extends Api {
    */
   private void getFeaturesByTile(final RoutingContext context) {
     try {
-      String tileId = context.pathParam(Path.TILE_ID);
-      String acceptTypeSuffix = null;
+      String tileId = context.pathParam(Path.TILE_ID),
+             tileType = context.pathParam(Path.TILE_TYPE),
+             acceptTypeSuffix = null;
+
       final boolean skipCache = Query.getBoolean(context, SKIP_CACHE, false);
+      final boolean force2D = Query.getBoolean(context, FORCE_2D, false);
+      final SpaceContext spaceContext = getSpaceContext(context);
 
       final int indexOfPoint = tileId.indexOf('.');
       if (indexOfPoint >= 0) {
@@ -216,40 +301,53 @@ public class FeatureQueryApi extends Api {
         tileId = tileId.substring(0, indexOfPoint);
       }
 
-      ApiResponseType responseType;
-      if ("mvt".equalsIgnoreCase(acceptTypeSuffix) || context.parsedHeaders().accept().stream().map(ParsedHeaderValue::rawValue).anyMatch(
-          APPLICATION_VND_MAPBOX_VECTOR_TILE::equals)) {
-        responseType = ApiResponseType.MVT;
-      } else if ("mvtf".equalsIgnoreCase(acceptTypeSuffix)) {
-        responseType = ApiResponseType.MVT_FLATTENED;
-      } else {
-        responseType = ApiResponseType.FEATURE_COLLECTION;
+      ApiResponseType responseType = ApiResponseType.FEATURE_COLLECTION;
+
+      if( context.parsedHeaders().accept().stream().map(ParsedHeaderValue::value).anyMatch( APPLICATION_VND_MAPBOX_VECTOR_TILE::equals) )
+       responseType = ApiResponseType.MVT;
+      else if( acceptTypeSuffix != null )
+       switch( acceptTypeSuffix.toLowerCase() )
+       { case "mvt2"  :
+         case "mvt"   : responseType = ApiResponseType.MVT; break;
+         case "mvtf2" :
+         case "mvtf"  : responseType = ApiResponseType.MVT_FLATTENED; break;
+         default : break;
+       }
+
+      GetFeaturesByTileEvent event = new GetFeaturesByTileEvent();
+
+      String optimMode = Query.getString(context, Query.OPTIM_MODE, "raw");
+
+      try {
+        event.withClip(Query.getBoolean(context, Query.CLIP, (responseType == ApiResponseType.MVT || responseType == ApiResponseType.MVT_FLATTENED || "viz".equals(optimMode) )))
+            .withMargin(Query.getInteger(context, Query.MARGIN, 0))
+            .withClusteringType(Query.getString(context, Query.CLUSTERING, null))
+            .withClusteringParams(Query.getAdditionalParams(context, Query.CLUSTERING))
+            .withTweakType(Query.getString(context, Query.TWEAKS, null))
+            .withTweakParams(Query.getAdditionalParams(context, Query.TWEAKS))
+            .withLimit(getLimit(context, ("viz".equals(optimMode) ? HARD_LIMIT : DEFAULT_FEATURE_LIMIT)))
+            .withPropertiesQuery(Query.getPropertiesQuery(context))
+            .withSelection(Query.getSelection(context))
+            .withForce2D(force2D)
+            .withOptimizationMode(optimMode)
+            .withVizSampling(Query.getString(context, Query.OPTIM_VIZSAMPLING, "med"))
+            .withResponseType(responseType == ApiResponseType.MVT ? MVT : responseType == ApiResponseType.MVT_FLATTENED ? MVT_FLATTENED : GEO_JSON)
+            .withHereTileFlag("here".equals(tileType))
+            .withContext(spaceContext)
+            .withRef(getRef(context));
+      } catch (Exception e) {
+        throw new HttpException(BAD_REQUEST,e.getMessage());
       }
-
-      GetFeaturesByTileEvent event = new GetFeaturesByTileEvent()
-          .withClip(Query.getBoolean(context, Query.CLIP, false) || responseType == ApiResponseType.MVT || responseType == ApiResponseType.MVT_FLATTENED)
-          .withMargin(Query.getInteger(context, Query.MARGIN, 0))
-          .withClusteringType(Query.getString(context, Query.CLUSTERING, null))
-          .withClusteringParams(Query.getClusteringParams(context))
-          .withSimplificationLevel(Query.getInteger(context, Query.SIMPLIFICATION_LEVEL, -1))
-          .withLimit(getLimit(context))
-          .withTags(Query.getTags(context))
-          .withPropertiesQuery(Query.getPropertiesQuery(context))
-          .withSelection(Query.getSelection(context));
-
-      final TileQuery task = new TileQuery(event, context, responseType, skipCache);
-      String tileType = context.pathParam(Path.TILE_TYPE);
 
       try {
         WebMercatorTile tileAddress = null;
         HQuad hereTileAddress = null;
-        if ("tms".equals(tileType)) {
-          tileAddress = WebMercatorTile.forTMS(tileId);
-        } else if ("web".equals(tileType)) {
-          tileAddress = WebMercatorTile.forWeb(tileId);
-        } else if ("quadkey".equals(tileType)) {
-          tileAddress = WebMercatorTile.forQuadkey(tileId);
-        } else if ("here".equals(tileType)) {
+
+        switch( tileType ) {
+         case "tms"     : tileAddress = WebMercatorTile.forTMS(tileId); break;
+         case "web"     : tileAddress = WebMercatorTile.forWeb(tileId); break;
+         case "quadkey" : tileAddress = WebMercatorTile.forQuadkey(tileId); break;
+         case "here" : 
           if (tileId.contains("_")) {
             String[] levelRowColumnArray = tileId.split("_");
             if (levelRowColumnArray.length == 3) {
@@ -261,12 +359,16 @@ public class FeatureQueryApi extends Api {
               throw new HttpException(BAD_REQUEST, "Invalid argument tileId.");
             }
           } else {
-            hereTileAddress = new HQuad(tileId);
+            hereTileAddress = new HQuad(tileId, Service.configuration.USE_BASE_4_H_TILES);
           }
+          break;
+         
+         default:
+          throw new HttpException(BAD_REQUEST, String.format("Invalid path argument {type} of tile request '%s' != [tms,web,quadkey,here]",tileType));
         }
 
         if (tileAddress != null) {
-          event.setBbox(tileAddress.getExtendedBBox((int) event.getMargin()));
+          event.setBbox(tileAddress.getExtendedBBox(event.getMargin()));
           event.setLevel(tileAddress.level);
           event.setX(tileAddress.x);
           event.setY(tileAddress.y);
@@ -278,11 +380,15 @@ public class FeatureQueryApi extends Api {
           event.setX(hereTileAddress.x);
           event.setY(hereTileAddress.y);
           event.setQuadkey(hereTileAddress.quadkey);
-        }
+        } 
+        else
+         throw new IllegalArgumentException();
+
       } catch (IllegalArgumentException e) {
         throw new HttpException(BAD_REQUEST, "Invalid argument tileId.");
       }
 
+      final TileQuery task = new TileQuery(event, context, responseType, skipCache);
       task.execute(this::sendResponse, this::sendErrorResponse);
 
     } catch (HttpException e) {
@@ -291,7 +397,7 @@ public class FeatureQueryApi extends Api {
   }
 
   /**
-   * Checks the query string for an EPSG code, when found, it pases and returns it. If not found, it will return the provided default
+   * Checks the query string for an EPSG code, when found, it passes and returns it. If not found, it will return the provided default
    * value.
    */
   private int getVerifiedEpsg(RoutingContext context) throws HttpException {
@@ -319,19 +425,6 @@ public class FeatureQueryApi extends Api {
     throw new HttpException(BAD_REQUEST, "Invalid or unsupported EPSG code provided, in doubt please use 3785");
   }
 
-  /**
-   * Returns the value of the limit parameter of a default value.
-   */
-  private int getLimit(RoutingContext context) throws HttpException {
-    int limit = Query.getInteger(context, Query.LIMIT, DEFAULT_FEATURE_LIMIT);
-
-    if (limit < FeatureQueryApi.MIN_LIMIT || limit > FeatureQueryApi.HARD_LIMIT) {
-      throw new HttpException(BAD_REQUEST,
-          "The parameter limit must be between " + FeatureQueryApi.MIN_LIMIT + " and " + FeatureQueryApi.HARD_LIMIT
-              + ".");
-    }
-    return limit;
-  }
 
   /**
    * Parses the provided latitude and longitude values as a bounding box.
@@ -411,9 +504,8 @@ public class FeatureQueryApi extends Api {
    * Parses the body of the request as a FeatureCollection or a Feature object and returns the features as a list.
    */
   private Geometry getBodyAsGeometry(final RoutingContext context) throws HttpException {
-    final Marker logMarker = Context.getMarker(context);
     try {
-      final String text = context.getBodyAsString();
+      final String text = context.body().asString();
       if (text == null) {
         throw new HttpException(BAD_REQUEST, "Missing content");
       }

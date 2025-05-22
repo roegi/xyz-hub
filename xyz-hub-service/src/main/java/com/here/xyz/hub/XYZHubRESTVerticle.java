@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,289 +19,251 @@
 
 package com.here.xyz.hub;
 
-import static com.here.xyz.hub.rest.Api.HeaderValues.APPLICATION_JSON;
-import static com.here.xyz.hub.rest.Api.HeaderValues.STREAM_ID;
-import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
-import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
-import static io.vertx.core.http.HttpHeaders.AUTHORIZATION;
-import static io.vertx.core.http.HttpHeaders.CACHE_CONTROL;
-import static io.vertx.core.http.HttpHeaders.CONTENT_TYPE;
-import static io.vertx.core.http.HttpHeaders.ETAG;
-import static io.vertx.core.http.HttpHeaders.IF_MODIFIED_SINCE;
-import static io.vertx.core.http.HttpHeaders.IF_NONE_MATCH;
-import static io.vertx.core.http.HttpHeaders.USER_AGENT;
-import static io.vertx.core.http.HttpMethod.DELETE;
-import static io.vertx.core.http.HttpMethod.GET;
-import static io.vertx.core.http.HttpMethod.OPTIONS;
-import static io.vertx.core.http.HttpMethod.PATCH;
-import static io.vertx.core.http.HttpMethod.POST;
-import static io.vertx.core.http.HttpMethod.PUT;
+import static com.here.xyz.hub.task.Task.TASK;
+import static com.here.xyz.util.openapi.OpenApiGenerator.generate;
+import static io.vertx.core.http.HttpHeaders.CONTENT_LENGTH;
+import static io.vertx.core.http.HttpHeaders.LOCATION;
 
-import com.here.xyz.hub.auth.Authorization.AuthorizationType;
-import com.here.xyz.hub.auth.CompressedJWTAuthProvider;
-import com.here.xyz.hub.auth.JWTURIHandler;
-import com.here.xyz.hub.auth.JwtDummyHandler;
-import com.here.xyz.hub.rest.Api;
+import com.google.common.io.ByteStreams;
+import com.google.common.io.Files;
+import com.here.xyz.hub.auth.ExtendedJWTAuthHandler;
+import com.here.xyz.hub.auth.XyzAuthProvider;
+import com.here.xyz.hub.rest.AdminApi;
+import com.here.xyz.hub.rest.ChangesetApi;
+import com.here.xyz.hub.rest.ConnectorApi;
 import com.here.xyz.hub.rest.FeatureApi;
 import com.here.xyz.hub.rest.FeatureQueryApi;
-import com.here.xyz.hub.rest.HttpException;
+import com.here.xyz.hub.rest.JobProxyApi;
 import com.here.xyz.hub.rest.SpaceApi;
-import com.here.xyz.hub.rest.admin.AdminApi;
+import com.here.xyz.hub.rest.SubscriptionApi;
+import com.here.xyz.hub.rest.TagApi;
 import com.here.xyz.hub.rest.health.HealthApi;
-import com.here.xyz.hub.util.logging.LogUtil;
-import com.here.xyz.hub.util.logging.Logging;
+import com.here.xyz.hub.task.FeatureTask;
+import com.here.xyz.hub.task.Task;
 import io.netty.handler.codec.http.HttpResponseStatus;
-import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
-import io.vertx.core.http.HttpMethod;
-import io.vertx.core.http.HttpServerOptions;
-import io.vertx.core.json.Json;
+import io.vertx.core.Handler;
+import io.vertx.core.MultiMap;
+import io.vertx.core.Promise;
+import io.vertx.core.http.HttpServerResponse;
 import io.vertx.ext.auth.PubSecKeyOptions;
-import io.vertx.ext.auth.jwt.JWTAuth;
 import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
-import io.vertx.ext.web.api.contract.RouterFactoryOptions;
-import io.vertx.ext.web.api.contract.openapi3.OpenAPI3RouterFactory;
-import io.vertx.ext.web.handler.AuthHandler;
-import io.vertx.ext.web.handler.ChainAuthHandler;
-import io.vertx.ext.web.handler.CorsHandler;
-import io.vertx.ext.web.handler.JWTAuthHandler;
+import io.vertx.ext.web.handler.AuthenticationHandler;
+import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.StaticHandler;
+import io.vertx.ext.web.openapi.router.OpenAPIRoute;
+import io.vertx.ext.web.openapi.router.RouterBuilder;
+import io.vertx.openapi.contract.OpenAPIContract;
 import java.io.File;
-import java.util.Arrays;
-import java.util.List;
-import org.apache.commons.lang3.RandomStringUtils;
-import org.slf4j.Marker;
+import java.util.HashMap;
+import java.util.Hashtable;
+import java.util.Map;
+import java.util.Objects;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-public class XYZHubRESTVerticle extends AbstractVerticle implements Logging {
+public class XYZHubRESTVerticle extends AbstractHttpServerVerticle {
 
-  private static final HttpServerOptions SERVER_OPTIONS = new HttpServerOptions()
-      .setCompressionSupported(true)
-      .setDecompressionSupported(true)
-      .setHandle100ContinueAutomatically(true)
-      .setMaxInitialLineLength(16 * 1024);
+  private static final Logger logger = LogManager.getLogger();
 
-  /**
-   * The methods the client is allowed to use.
-   */
-  private final List<HttpMethod> allowMethods = Arrays.asList(OPTIONS, GET, POST, PUT, DELETE, PATCH);
+  private static String FULL_API;
+  private static String STABLE_API;
+  private static String EXPERIMENTAL_API;
+  private static String CONTRACT_API;
+  private static String CONTRACT_LOCATION;
 
-  /**
-   * The headers, which can be exposed as part of the response.
-   */
-  private final List<CharSequence> exposeHeaders = Arrays.asList(STREAM_ID, ETAG);
-
-  /**
-   * The headers the client is allowed to send.
-   */
-  private final List<CharSequence> allowHeaders = Arrays.asList(
-      AUTHORIZATION, CONTENT_TYPE, USER_AGENT, IF_MODIFIED_SINCE, IF_NONE_MATCH, CACHE_CONTROL, STREAM_ID
-  );
-
-  private FeatureApi featureApi;
-  private FeatureQueryApi featureQueryApi;
-  private SpaceApi spaceApi;
-  private HealthApi healthApi;
-  private AdminApi adminApi;
-
-  /**
-   * The final response handler.
-   */
-  private static void onResponseSent(RoutingContext context) {
-    final Marker marker = Api.Context.getMarker(context);
-    Logging.getLogger().info(marker, "{}", LogUtil.responseToLogEntry(context));
-    LogUtil.addResponseInfo(context).end();
-    LogUtil.writeAccessLog(context);
-  }
-
-  private static void failureHandler(RoutingContext context) {
-    if (context.failure() != null) {
-      sendErrorResponse(context, context.failure());
-    }
-    else {
-      String message = context.statusCode() == 401 ? "Missing auth credentials." : "A failure occurred during the execution.";
-      HttpResponseStatus status = context.statusCode() >= 400 ? HttpResponseStatus.valueOf(context.statusCode()) : INTERNAL_SERVER_ERROR;
-      sendErrorResponse(context, new HttpException(status, message));
-    }
-  }
-
-  /**
-   * The default NOT FOUND handler.
-   */
-  private static void notFoundHandler(final RoutingContext context) {
-    sendErrorResponse(context, new HttpException(NOT_FOUND, "The requested resource does not exist."));
-  }
-
-  /**
-   * Creates and sends an error response to the client.
-   */
-  public static void sendErrorResponse(final RoutingContext context, final Throwable exception) {
-    final ErrorMessage error = new ErrorMessage(context, exception);
+  static {
     try {
-      final Marker marker = Api.Context.getMarker(context);
-      if (error.statusCode >= 500) {
-        Logging.getLogger().error(marker, "sendErrorResponse: {} {} {}", error.statusCode, error.reasonPhrase, exception);
-        if (error.statusCode == 500)
-          error.message = null;
-      } else {
-        Logging.getLogger().warn(marker, "sendErrorResponse: {} {} {}", error.statusCode, error.reasonPhrase, exception);
-      }
+      final byte[] openapi = ByteStreams.toByteArray(Objects.requireNonNull(XYZHubRESTVerticle.class.getResourceAsStream("/openapi.yaml")));
+      final byte[] recipes = ByteStreams.toByteArray(
+          Objects.requireNonNull(XYZHubRESTVerticle.class.getResourceAsStream("/openapi-recipes.yaml")));
+
+      FULL_API = new String(openapi);
+      STABLE_API = new String(generate(openapi, recipes, "stable"));
+      EXPERIMENTAL_API = new String(generate(openapi, recipes, "experimental"));
+      CONTRACT_API = new String(generate(openapi, recipes, "contract"));
+
+      final File tempFile = File.createTempFile("contract-", ".yaml");
+      Files.write(CONTRACT_API.getBytes(), tempFile);
+      CONTRACT_LOCATION = tempFile.getCanonicalPath();
     } catch (Exception e) {
-      e.printStackTrace(System.err);
+      logger.error("Unable to generate OpenApi specs.", e);
     }
-    context.response()
-        .putHeader(CONTENT_TYPE, APPLICATION_JSON)
-        .setStatusCode(error.statusCode)
-        .setStatusMessage(error.reasonPhrase)
-        .end(Json.encode(error));
   }
 
-  /**
-   * The initial request handler.
-   */
-  private void onRequestReceived(final RoutingContext context) {
-    if (context.request().getHeader(STREAM_ID) == null)
-      context.request().headers().add(STREAM_ID, RandomStringUtils.randomAlphanumeric(10));
+  public static <T extends FeatureTask> void addStreamInfo(RoutingContext context, String streamInfoKey, Object streamInfoValue) {
+    if (context.get(STREAM_INFO_CTX_KEY) == null)
+      context.put(STREAM_INFO_CTX_KEY, new HashMap<String, Object>());
 
-    //Log the request information.
-    LogUtil.addRequestInfo(context);
-    LogUtil.logRequest(context);
-
-    context.response().putHeader(STREAM_ID, context.request().getHeader(STREAM_ID));
-    context.response().endHandler(ar -> XYZHubRESTVerticle.onResponseSent(context));
-    context.next();
+    ((Map<String, Object>) context.get(STREAM_INFO_CTX_KEY)).put(streamInfoKey, streamInfoValue);
   }
 
   @Override
-  public void start(Future<Void> fut) throws Exception {
-    // URL uri = XYZHubRESTVerticle.class.getResource();
-    OpenAPI3RouterFactory.create(vertx, "/openapi/contract-openapi3.yaml", ar -> {
-      if (ar.succeeded()) {
-        //Add the handlers
-        final OpenAPI3RouterFactory routerFactory = ar.result();
-        routerFactory.setOptions(new RouterFactoryOptions());
-        featureApi = new FeatureApi(routerFactory);
-        featureQueryApi = new FeatureQueryApi(routerFactory);
-        spaceApi = new SpaceApi(routerFactory);
-
-        final AuthHandler jwtHandler = createJWTHandler();
-        routerFactory.addSecurityHandler("authToken", jwtHandler);
-
-        final Router router = routerFactory.getRouter();
-        //Add additional handler to the router
-        router.route().failureHandler(XYZHubRESTVerticle::failureHandler);
-        router.route().order(0)
-            .handler(this::onRequestReceived)
-            .handler(createCorsHandler());
-
-        this.healthApi = new HealthApi(vertx, router);
-        this.adminApi = new AdminApi(vertx, router, jwtHandler);
-
-        //Static resources
-        router.route("/hub/static/*").handler(StaticHandler.create().setIndexPage("index.html"));
-        if (Service.configuration.FS_WEB_ROOT != null) {
-          logger().debug("Serving extra web-root folder in file-system with location: {}", Service.configuration.FS_WEB_ROOT);
-          new File(Service.configuration.FS_WEB_ROOT).mkdirs();
-          router.route("/hub/static/*")
-              .handler(StaticHandler.create(Service.configuration.FS_WEB_ROOT).setIndexPage("index.html"));
-        }
-
-        //Default NotFound handler
-        router.route().last().handler(XYZHubRESTVerticle::notFoundHandler);
-
-        vertx.createHttpServer(SERVER_OPTIONS)
-            .requestHandler(router::accept)
-            .listen(
-                Service.configuration.HTTP_PORT, result -> {
-                  if (result.succeeded()) {
-                    fut.complete();
-                  }
-                  else {
-                    logger().error("An error occurred, during the initialization of the server.", result.cause());
-                    fut.fail(result.cause());
-                  }
-                });
-
-        int messagePort = Service.configuration.ADMIN_MESSAGE_PORT;
-        if (messagePort != Service.configuration.HTTP_PORT) {
-          //Create 2nd HTTP server for admin-messaging
-          vertx.createHttpServer(SERVER_OPTIONS)
-              .requestHandler(router::accept)
-              .listen(messagePort, result -> {
-                if (result.succeeded()) {
-                  logger().debug("HTTP server also listens on admin-messaging port {}.", messagePort);
-                }
-                else {
-                  logger().error("An error occurred, during the initialization of admin-messaging http port" + messagePort + ". Messaging won't work correctly.",
-                      result.cause());
-                }
-              });
-        }
-      }
-      else {
-        logger().error("An error occurred, during the creation of the router from the Open API specification file.", ar.cause());
-      }
-    });
+  protected void onRequestCancelled(RoutingContext context) {
+    super.onRequestCancelled(context);
+    Task task = context.get(TASK);
+    if (task != null) {
+      //Cancel all pending actions of the task which might be in progress
+      task.cancel();
+    }
   }
 
-  /**
-   * Add support for cross origin requests.
-   */
-  private CorsHandler createCorsHandler() {
-    CorsHandler cors = CorsHandler.create(".*").allowCredentials(true);
-    allowMethods.forEach(cors::allowedMethod);
-    allowHeaders.stream().map(String::valueOf).forEach(cors::allowedHeader);
-    exposeHeaders.stream().map(String::valueOf).forEach(cors::exposedHeader);
-    return cors;
+  @Override
+  public void start(Promise<Void> startPromise) throws Exception {
+    OpenAPIContract.from(vertx, CONTRACT_LOCATION)
+        .compose(this::buildRoutes)
+        .onSuccess(none -> startPromise.complete())
+        .onFailure(throwable -> {
+          startPromise.fail(throwable);
+          routerFailure(throwable);
+        });
+  }
+
+  private Future<Void> buildRoutes(OpenAPIContract contract) {
+
+    try {
+      RouterBuilder rb = RouterBuilder.create(vertx, contract);
+
+      final AuthenticationHandler jwtHandler = createJWTHandler();
+      for (OpenAPIRoute route : rb.getRoutes()) {
+        route.addHandler(BodyHandler.create());
+        route.addHandler(jwtHandler);
+      }
+
+      new FeatureApi(rb);
+      new FeatureQueryApi(rb);
+      new SpaceApi(rb);
+      new ConnectorApi(rb);
+      new SubscriptionApi(rb);
+      new ChangesetApi(rb);
+      new JobProxyApi(rb);
+      new TagApi(rb);
+
+      final Router router = rb.createRouter();
+
+      new HealthApi(vertx, router);
+      new AdminApi(vertx, router, jwtHandler);
+
+      //OpenAPI resources
+      router.route("/hub/static/openapi/*").handler(createCorsHandler()).handler((routingContext -> {
+        final HttpServerResponse res = routingContext.response();
+        res.putHeader("content-type", "application/yaml");
+        final String path = routingContext.request().path();
+        if (path.endsWith("full.yaml")) {
+          res.headers().add(CONTENT_LENGTH, String.valueOf(FULL_API.getBytes().length));
+          res.write(FULL_API);
+        } else if (path.endsWith("stable.yaml")) {
+          res.headers().add(CONTENT_LENGTH, String.valueOf(STABLE_API.getBytes().length));
+          res.write(STABLE_API);
+        } else if (path.endsWith("experimental.yaml")) {
+          res.headers().add(CONTENT_LENGTH, String.valueOf(EXPERIMENTAL_API.getBytes().length));
+          res.write(EXPERIMENTAL_API);
+        } else if (path.endsWith("contract.yaml")) {
+          res.headers().add(CONTENT_LENGTH, String.valueOf(CONTRACT_API.getBytes().length));
+          res.write(CONTRACT_API);
+        } else {
+          res.setStatusCode(HttpResponseStatus.NOT_FOUND.code());
+        }
+
+        res.end();
+      }));
+
+      //Static resources
+      router.route("/hub/static/*")
+          .handler(createCorsHandler())
+          .handler(
+              new DelegatingHandler<>(StaticHandler.create().setIndexPage("index.html"), context -> context.addHeadersEndHandler(v -> {
+                //This handler implements a workaround for an issue with CloudFront, which removes slashes at the end of the request-URL's path
+                MultiMap headers = context.response().headers();
+                if (headers.contains(LOCATION)) {
+                  String headerValue = headers.get(LOCATION);
+                  if (headerValue.endsWith("/")) {
+                    headers.set(LOCATION, headerValue + "index.html");
+                  }
+                }
+              }), null));
+      if (Service.configuration.FS_WEB_ROOT != null) {
+        logger.debug("Serving extra web-root folder in file-system with location: {}", Service.configuration.FS_WEB_ROOT);
+        //noinspection ResultOfMethodCallIgnored
+        new File(Service.configuration.FS_WEB_ROOT).mkdirs();
+        router.route("/hub/static/*")
+            .handler(StaticHandler.create(Service.configuration.FS_WEB_ROOT).setIndexPage("index.html"));
+      }
+
+      //Add default handlers
+      addDefaultHandlers(router);
+
+      vertx.sharedData().<String, Hashtable<String, Object>>getAsyncMap(Service.SHARED_DATA, sharedDataResult -> {
+        sharedDataResult.result().get(Service.SHARED_DATA, hashtableResult -> {
+          final Hashtable<String, Object> sharedData = hashtableResult.result();
+          final Router globalRouter = (Router) sharedData.get(Service.GLOBAL_ROUTER);
+
+          globalRouter.mountSubRouter("/", router);
+          //Default NotFound handler
+          globalRouter.route().last().handler(createNotFoundHandler());
+
+          vertx.eventBus().localConsumer(Service.SHARED_DATA, event -> {
+            //Create the main service listener
+            createHttpServer(Service.configuration.HTTP_PORT, globalRouter);
+
+            //Create the main service TLS listener
+            if (Service.configuration.XYZ_HUB_HTTPS_PORT > 0
+                && Service.configuration.XYZ_HUB_SERVER_TLS_KEY != null && Service.configuration.XYZ_HUB_SERVER_TLS_CERT != null)
+              createHttpServerWithMutualTls(Service.configuration.XYZ_HUB_HTTPS_PORT, globalRouter, Service.configuration.XYZ_HUB_SERVER_TLS_KEY,
+                  Service.configuration.XYZ_HUB_SERVER_TLS_CERT, Service.configuration.XYZ_HUB_CLIENT_TLS_TRUSTSTORE);
+
+            //Create the admin messaging listener
+            if (Service.configuration.HTTP_PORT != Service.configuration.ADMIN_MESSAGE_PORT) {
+              createHttpServer(Service.configuration.ADMIN_MESSAGE_PORT, globalRouter);
+            }
+          });
+        });
+      });
+    } catch (Exception e) {
+      return Future.failedFuture(e);
+    }
+
+    return Future.succeededFuture();
+  }
+
+  private static void routerFailure(Throwable t) {
+    logger.error("An error occurred, during the creation of the router from the Open API specification file.", t);
   }
 
   /**
    * Add the security handlers.
    */
-  private AuthHandler createJWTHandler() {
+  private AuthenticationHandler createJWTHandler() {
     JWTAuthOptions authConfig = new JWTAuthOptions().addPubSecKey(
         new PubSecKeyOptions().setAlgorithm("RS256")
-            .setPublicKey(Service.configuration.JWT_PUB_KEY));
+            .setBuffer(Service.configuration.getJwtPubKey()));
 
-    JWTAuth authProvider = new CompressedJWTAuthProvider(vertx, authConfig);
-
-    ChainAuthHandler authHandler = ChainAuthHandler.create()
-        .append(JWTAuthHandler.create(authProvider))
-        .append(JWTURIHandler.create(authProvider));
-
-    if (Service.configuration.XYZ_HUB_AUTH == AuthorizationType.DUMMY)
-      authHandler.append(JwtDummyHandler.create(authProvider));
-
-    return authHandler;
+    return new ExtendedJWTAuthHandler(new XyzAuthProvider(vertx, authConfig), null);
   }
 
-  /**
-   * Represents an error object response.
-   */
-  private static class ErrorMessage {
+  private static class DelegatingHandler<E> implements Handler<E> {
 
-    public String type = "error";
-    public int statusCode;
-    public String reasonPhrase;
-    public String message;
-    public String streamId;
+    private final Handler<E> before;
+    private final Handler<E> delegate;
+    private final Handler<E> after;
 
-    public ErrorMessage(RoutingContext context, Throwable e) {
-      Marker marker = Api.Context.getMarker(context);
-      this.streamId = marker.getName();
-      this.message = e.getMessage();
-      if (e instanceof HttpException) {
-        this.statusCode = ((HttpException) e).status.code();
-        this.reasonPhrase = ((HttpException) e).status.reasonPhrase();
-      } else {
-        this.statusCode = INTERNAL_SERVER_ERROR.code();
-        this.reasonPhrase = INTERNAL_SERVER_ERROR.reasonPhrase();
+    DelegatingHandler(Handler<E> delegate, Handler<E> before, Handler<E> after) {
+      assert delegate != null;
+      this.before = before;
+      this.delegate = delegate;
+      this.after = after;
+    }
+
+    @Override
+    public void handle(E event) {
+      if (before != null) {
+        before.handle(event);
       }
-
-      // The authentication providers do not pass the exception message
-      if (statusCode == 401 && message == null) {
-        message = "Access to this resource requires valid authentication credentials.";
+      delegate.handle(event);
+      if (after != null) {
+        after.handle(event);
       }
     }
   }

@@ -1,39 +1,58 @@
 {
   "configuration": {
     "status": "info",
-
     "name": "Default Log Config",
     "packages": "com.here.xyz",
-
-    "ThresholdFilter": {
-      "level": "info"
-    },
     "appenders": {
-      "RollingFile": {
-        "name": "RollingFile-Appender",
-        "fileName": "${env:LOG_PATH}/trace.log.0",
-        "filePattern": "${env:LOG_PATH}/trace.log.%i",
-        "PatternLayout": {
-          "ScriptPatternSelector": {
-            "defaultPattern": "{\"t\":\"%p\",\"time\":\"%d{ISO8601}\",\"unixtime\":\"%d{UNIX_MILLIS}\",\"src\":\"%C{1}:%L\",\"msg\":\"%replace{%replace{%.-4096msg%throwable}{[\n]}{\\\\n}}{[\\\"]}{\\\\\"}\",\"streamId\":\"%marker\"}%n%xEx{none}",
-            "Script": {
-              "name": "JavaScriptSelector",
-              "language": "JavaScript",
-              "value": "logEvent.getMessage().getFormattedMessage().contains('clientInfo') ? 'STREAM' : null"
-            },
-            "PatternMatch": {
-              "key": "STREAM",
-              "pattern": "%m%n"
+      "RollingRandomAccessFile": [
+        {
+          "name": "DefaultAppender",
+          "fileName": "${env:LOG_PATH}/trace.log.0",
+          "filePattern": "${env:LOG_PATH}/trace.log.%i",
+          "PatternLayout": {
+            "MarkerPatternSelector": {
+              "defaultPattern": "{\"t\":\"%p\",\"time\":\"%d{ISO8601}\",\"unixtime\":\"%d{UNIX_MILLIS}\",\"msg\":\"%enc{%.-4096msg%ex}{JSON} \",\"streamId\":\"%marker\",\"src\":\"%c\"}%n%xEx{none}",
+              "PatternMatch": {
+                "key": "ACCESS",
+                "pattern": "%m%n"
+              }
             }
+          },
+          "Policies": {
+            "SizeBasedTriggeringPolicy": {
+              "size": "64 MB"
+            }
+          },
+          "DefaultRolloverStrategy": {
+            "max": "2"
           }
         },
-        "Policies": {
-          "SizeBasedTriggeringPolicy": {
-            "size": "100 MB"
+        {
+          "name": "AccessLogAppender",
+          "fileName": "${env:LOG_PATH}/access.log.0",
+          "filePattern": "${env:LOG_PATH}/access.log.%i",
+          "PatternLayout": {
+            "pattern": "%m%n"
+          },
+          "MarkerFilter": {
+            "marker": "ACCESS",
+            "onMatch": "ACCEPT",
+            "onMismatch": "DENY"
+          },
+          "Policies": {
+            "SizeBasedTriggeringPolicy": {
+              "size": "64 MB"
+            }
+          },
+          "DefaultRolloverStrategy": {
+            "max": "2"
           }
-        },
-        "DefaultRolloverStrategy": {
-          "max": "1"
+        }
+      ],
+      "Console": {
+        "name": "STDOUT",
+        "PatternLayout": {
+          "pattern": "%m%n"
         }
       }
     },
@@ -41,9 +60,17 @@
       "root": {
         "level": "info",
         "includeLocation": true,
-        "AppenderRef": {
-          "ref": "RollingFile-Appender"
-        }
+        "AppenderRef": [
+          {
+            "ref": "STDOUT"
+          },
+          {
+            "ref": "DefaultAppender"
+          },
+          {
+            "ref": "AccessLogAppender"
+          }
+        ]
       }
     }
   }

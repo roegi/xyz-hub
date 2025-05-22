@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2023 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,32 +19,90 @@
 
 package com.here.xyz.hub.task;
 
-import com.here.xyz.hub.rest.HttpException;
+import static com.here.xyz.models.hub.FeatureModificationList.IfExists.DELETE;
+import static com.here.xyz.models.hub.FeatureModificationList.IfExists.MERGE;
+import static com.here.xyz.models.hub.FeatureModificationList.IfExists.PATCH;
+import static com.here.xyz.models.hub.FeatureModificationList.IfExists.REPLACE;
+import static com.here.xyz.models.hub.FeatureModificationList.IfExists.RETAIN;
+
+import com.here.xyz.hub.task.ModifyOp.Entry;
+import com.here.xyz.hub.util.diff.Difference;
+import com.here.xyz.hub.util.diff.Patcher;
+import com.here.xyz.models.hub.FeatureModificationList.ConflictResolution;
+import com.here.xyz.models.hub.FeatureModificationList.IfExists;
+import com.here.xyz.models.hub.FeatureModificationList.IfNotExists;
+import com.here.xyz.util.service.HttpException;
+import io.vertx.core.json.JsonObject;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
-import java.util.stream.Collectors;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
- * A modify operation, which transforms an INPUT object to a TARGET object.
- *
- * @param <INPUT> some input, which may be a full state or just some instructions how to modify the current source state to produce a
- * certain target state.
- * @param <SOURCE> the type current state.
- * @param <TARGET> the target state that is the source state modified by the operation described by the input.
+ * A modify operation
  */
-public abstract class ModifyOp<INPUT, SOURCE, TARGET> {
+public abstract class ModifyOp<T, K extends Entry<T>> {
 
-  public final List<Entry<INPUT, SOURCE, TARGET>> entries;
-  public final IfExists ifExists;
-  public final IfNotExists ifNotExists;
+  public final List<K> entries;
   public final boolean isTransactional;
 
-  public ModifyOp(List<INPUT> inputStates, IfNotExists ifNotExists, IfExists ifExists, boolean isTransactional) {
-    this.ifExists = ifExists;
-    this.ifNotExists = ifNotExists;
+  private Set<Operation> usedOperations;
+
+  public enum Operation {
+    READ,
+    CREATE,
+    UPDATE,
+    DELETE,
+    WRITE //Reserved for future use
+  }
+
+  private static final List<IfExists> UPDATE_OPS = Arrays.asList(PATCH, MERGE, REPLACE);
+
+  public ModifyOp(List<K> entries, boolean isTransactional) {
     this.isTransactional = isTransactional;
-    this.entries = (inputStates == null) ? Collections.emptyList()
-        : inputStates.stream().map(Entry<INPUT, SOURCE, TARGET>::new).collect(Collectors.toList());
+    this.entries = entries;
+  }
+
+  public Set<Operation> getUsedOperations() {
+    if (usedOperations == null) {
+      usedOperations = new HashSet<>();
+      entries.forEach(e -> {
+        if (e.head != null && e.ifExists.equals(RETAIN))
+          usedOperations.add(Operation.READ);
+        else if (e.head == null && e.ifNotExists.equals(IfNotExists.CREATE))
+          usedOperations.add(Operation.CREATE);
+        else if (e.head != null && e.ifExists.equals(DELETE))
+          usedOperations.add(Operation.DELETE);
+        else if (e.head != null && UPDATE_OPS.contains(e.ifExists))
+          usedOperations.add(Operation.UPDATE);
+      });
+    }
+    if (!Collections.disjoint(usedOperations, Arrays.asList(Operation.CREATE, Operation.UPDATE, Operation.DELETE)))
+      usedOperations.add(Operation.WRITE);
+    return usedOperations;
+  }
+
+  public boolean isRead() {
+    return getUsedOperations().contains(Operation.READ);
+  }
+
+  public boolean isCreate() {
+    return getUsedOperations().contains(Operation.CREATE);
+  }
+
+  public boolean isDelete() {
+    return getUsedOperations().contains(Operation.DELETE);
+  }
+
+  public boolean isUpdate() {
+    return getUsedOperations().contains(Operation.UPDATE);
+  }
+
+  public boolean isWrite() { //Reserved for future use
+    return getUsedOperations().contains(Operation.WRITE);
   }
 
   /**
@@ -54,139 +112,198 @@ public abstract class ModifyOp<INPUT, SOURCE, TARGET> {
    * @throws ModifyOpError when a processing error occurs.
    */
   public void process() throws ModifyOpError, HttpException {
-    for (Entry<INPUT, SOURCE, TARGET> entry : entries) {
+    for (K entry : entries) {
       try {
-        // IF NOT EXISTS
+        //IF NOT EXISTS
         if (entry.head == null) {
-          switch (ifNotExists) {
+          switch (entry.ifNotExists) {
             case RETAIN:
               entry.result = null;
               break;
-            case CREATE:
-              entry.result = create(entry.input);
+            case CREATE: {
+              entry.result = entry.create();
               break;
+            }
             case ERROR:
               throw new ModifyOpError("The record does not exist.");
           }
         }
-        // IF EXISTS
+        //IF EXISTS
         else {
-          switch (ifExists) {
+          switch (entry.ifExists) {
             case RETAIN:
-              entry.result = transform(entry.head);
+              entry.result = entry.transform();
               break;
             case MERGE:
-              entry.result = merge(entry.head, entry.base, entry.input);
+              entry.result = entry.merge();
               break;
             case PATCH:
-              entry.result = patch(entry.head, entry.base, entry.input);
+              entry.result = entry.patch();
               break;
             case REPLACE:
-              entry.result = replace(entry.head, entry.input);
+              entry.result = entry.replace();
               break;
             case DELETE:
-              entry.result = null;
+              entry.result = entry.delete();
               break;
             case ERROR:
-              throw new ModifyOpError("The record exists.");
+              throw new ModifyOpError("The record {" + entry.getId(entry.head) + "} exists.");
           }
         }
 
-        entry.isModified = !equalStates(entry.head, entry.result);
-      } catch (ModifyOpError e) {
+        //Check if the isModified flag is not already set. Compare the objects in case it is not set yet.
+        entry.isModified = entry.isModified || entry.isModified();
+      }
+      catch (ModifyOpError e) {
         if (isTransactional) {
           throw e;
         }
-        // TODO: Check if this is included in the failed array
+        //TODO: Check if this is included in the failed array
         entry.exception = e;
       }
     }
   }
 
-  public abstract TARGET patch(SOURCE headState, SOURCE editedState, INPUT inputState) throws ModifyOpError, HttpException;
+  public static abstract class Entry<T> {
 
-  public abstract TARGET merge(SOURCE headState, SOURCE editedState, INPUT inputState) throws ModifyOpError, HttpException;
-
-  public abstract TARGET replace(SOURCE headState, INPUT inputState) throws ModifyOpError, HttpException;
-
-  public abstract TARGET create(INPUT inputState) throws ModifyOpError, HttpException;
-
-  public abstract TARGET transform(SOURCE sourceState) throws ModifyOpError, HttpException;
-
-  /**
-   * Returns true, if the 2 objects represent the same object in the same state. Modifications that are not relevant should be ignored by
-   * this method, therefore the method is not binary safe.
-   *
-   * @param state1 the source state.
-   * @param state2 the target state.
-   * @return true when the source and target state are logically equal; false otherwise.
-   */
-  public abstract boolean equalStates(SOURCE state1, TARGET state2);
-
-  public enum IfExists {
-    RETAIN,
-    ERROR,
-    DELETE,
-    REPLACE,
-    PATCH,
-    MERGE;
-
-    public static IfExists of(String value) {
-      if (value == null) {
-        return null;
-      }
-      try {
-        return valueOf(value.toUpperCase());
-      } catch (IllegalArgumentException e) {
-        return null;
-      }
-    }
-  }
-
-  public enum IfNotExists {
-    RETAIN,
-    ERROR,
-    CREATE;
-
-    public static IfNotExists of(String value) {
-      if (value == null) {
-        return null;
-      }
-      try {
-        return valueOf(value.toUpperCase());
-      } catch (IllegalArgumentException e) {
-        return null;
-      }
-    }
-  }
-
-  public static class Entry<INPUT, SOURCE, RESULT> {
-
-    public boolean isModified;
     /**
      * The input as it comes from the caller
      */
-    public INPUT input;
+    public Map<String, Object> input;
 
     /**
      * The latest state the object currently has in the data storage
      */
-    public SOURCE head;
+    public T head;
 
     /**
      * The state onto which the caller made the modifications
      */
-    public SOURCE base;
+    public T base;
 
     /**
      * The resulting target state which should go to the data storage after merging
      */
-    public RESULT result;
+    public T result;
 
+    public final IfExists ifExists;
+    public final IfNotExists ifNotExists;
+
+    private final ConflictResolution cr;
+    private Map<String, Object> headMap;
+    public boolean isModified;
     public Exception exception;
+    public long inputVersion;
+    public boolean skipConflictDetection;
+    private Map<String, Object> resultMap;
 
-    public Entry(INPUT input) {
-      this.input = input;
+    public Entry(Map<String, Object> input, IfNotExists ifNotExists, IfExists ifExists, ConflictResolution cr) {
+      this.inputVersion = getVersion(input);
+      this.input = filterMetadata(input);
+      this.cr = cr;
+      this.ifExists = ifExists;
+      this.ifNotExists = ifNotExists;
+    }
+
+    private Map<String, Object> getHeadMap() throws HttpException, ModifyOpError {
+      if (headMap == null && head != null) {
+          headMap = toMap(head);
+      }
+      return headMap;
+    }
+
+    private Map<String, Object> getResultMap() throws HttpException, ModifyOpError {
+      if (resultMap == null && result!=null) {
+        resultMap = toMap(result);
+      }
+      return resultMap;
+    };
+
+    protected abstract String getId(T record);
+
+    protected abstract long getVersion(Map<String, Object> record);
+
+    protected abstract long getVersion(T record);
+
+    public T patch() throws ModifyOpError, HttpException {
+      final Map<String, Object> computedInput = toMap(base);
+      final Difference diff = Patcher.calculateDifferenceOfPartialUpdate(computedInput, input, null, true);
+      if (diff == null) {
+        return head;
+      }
+
+      Patcher.patch(computedInput, diff);
+      input = computedInput;
+      return merge();
+    }
+
+    public T merge() throws ModifyOpError, HttpException {
+      if (base.equals(head)) {
+        return replace();
+      }
+
+      final Map<String, Object> resultMap = toMap(base);
+
+      final Difference diffInput = Patcher.getDifference(resultMap, input);
+      if (diffInput == null) {
+        return head;
+      }
+      final Difference diffHead = Patcher.getDifference(resultMap, getHeadMap());
+      try {
+        final Difference mergedDiff = Patcher.mergeDifferences(diffHead, diffInput, cr);
+        Patcher.patch(resultMap, mergedDiff);
+        this.resultMap = resultMap;
+        return fromMap(resultMap);
+      }
+      catch (Exception e) {
+        throw new ModifyOpError(e.getMessage());
+      }
+    }
+
+    public T replace() throws ModifyOpError, HttpException {
+      if (!skipConflictDetection && inputVersion != -1 && getVersion(head) != -1 && inputVersion != getVersion(head))
+        throw new ModifyOpError("The feature with id " + getId(head) + " cannot be replaced. The provided version doesn't match the "
+            + "version of the head state: " + getVersion(head));
+
+      return fromMap(input);
+    }
+
+    public T delete() throws ModifyOpError, HttpException {
+      if (!skipConflictDetection && inputVersion != -1 && getVersion(head) != -1 && inputVersion != getVersion(head))
+        throw new ModifyOpError("The feature with id " + getId(head) + " cannot be deleted. The provided version doesn't match the "
+            + "version of the head state: " + getVersion(head));
+
+      if (head != null)
+        isModified = true;
+
+      return null;
+    }
+
+    public T create() throws ModifyOpError, HttpException {
+      isModified = true;
+      return fromMap(input);
+    }
+
+    public T transform() {
+      return head;
+    }
+
+    public abstract Map<String, Object> filterMetadata(Map<String, Object> map);
+
+    public abstract T fromMap(Map<String, Object> map) throws ModifyOpError, HttpException;
+
+    public abstract Map<String, Object> toMap(T record) throws ModifyOpError, HttpException;
+
+    /**
+     * Checks, if the result of the operation is different from the head state.
+     *
+     * @return true, if the result of the operation is different from the head state.
+     */
+    boolean isModified() throws HttpException, ModifyOpError {
+      if (Objects.equals(head, result)) {
+        return false;
+      }
+      return !(new JsonObject(getHeadMap()).equals(new JsonObject(getResultMap())));
     }
   }
 
@@ -195,5 +312,28 @@ public abstract class ModifyOp<INPUT, SOURCE, TARGET> {
     public ModifyOpError(String msg) {
       super(msg);
     }
+  }
+
+  /**
+   * Filter out recursively all properties from the provided filter, where the value is set to 'true'.
+   *
+   * @param map the object to filter
+   * @param filter the filter to apply
+   */
+  public static Map<String, Object> filter(Map<String, Object> map, Map<String, Object> filter) {
+    if (map == null || filter == null) {
+      return map;
+    }
+
+    for (String key : filter.keySet()) {
+      if (filter.get(key) instanceof Map && map.get(key) instanceof Map) {
+        //noinspection unchecked
+        filter((Map<String, Object>) map.get(key), (Map<String, Object>) filter.get(key));
+      }
+      if (filter.get(key) instanceof Boolean && (Boolean) filter.get(key)) {
+        map.remove(key);
+      }
+    }
+    return map;
   }
 }

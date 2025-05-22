@@ -20,10 +20,13 @@
 package com.here.xyz.hub.auth;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import io.vertx.core.json.Json;
+import com.here.xyz.models.hub.jwt.ActionMatrix;
+import com.here.xyz.models.hub.jwt.JWTPayload;
 import io.vertx.core.json.JsonObject;
+import io.vertx.core.json.jackson.DatabindCodec;
 import org.junit.Test;
 
 public class JWTPayloadTest {
@@ -32,7 +35,7 @@ public class JWTPayloadTest {
   public void fromJson() {
     String jwtString = "{\"aid\":\"XYZ-01234567-89ab-cdef-0123-456789aUSER1\",\"iat\":1521982864,\"exp\":1525039199,\"urm\":{\"xyz-hub\":{\"readFeatures\":[{\"owner\":\"XYZ-01234567-89ab-cdef-0123-456789aUSER1\"}]}}}";
     JsonObject jwtJson = new JsonObject(jwtString);
-    JWTPayload jwtPayload = Json.mapper.convertValue(jwtJson,JWTPayload.class);
+    JWTPayload jwtPayload = DatabindCodec.mapper().convertValue(jwtJson,JWTPayload.class);
     final ActionMatrix hereActionMatrix = jwtPayload.urm.get("xyz-hub");
     assertTrue(hereActionMatrix.containsKey("readFeatures"));
   }
@@ -41,8 +44,8 @@ public class JWTPayloadTest {
   public void fromJsonWithLimit() {
     String jwtString = "{\"aid\":\"XYZ-01234567-89ab-cdef-0123-456789aUSER1\",\"iat\":1521982864,\"exp\":1525039199,\"limits\":{\"maxSpaces\":10,\"maxFeaturesPerSpace\":1000000},\"urm\":{\"xyz-hub\":{\"readFeatures\":[{\"owner\":\"XYZ-01234567-89ab-cdef-0123-456789aUSER1\"}]}}}";
     JsonObject jwtJson = new JsonObject(jwtString);
-    JWTPayload jwtPayload = Json.mapper.convertValue(jwtJson,JWTPayload.class);
-    assertTrue(jwtPayload.limits instanceof  XYZUsageLimits);
+    JWTPayload jwtPayload = DatabindCodec.mapper().convertValue(jwtJson,JWTPayload.class);
+    assertNotNull(jwtPayload.limits);
     assertEquals(10, jwtPayload.limits.maxSpaces);
     assertEquals(1_000_000, jwtPayload.limits.maxFeaturesPerSpace);
   }
@@ -51,9 +54,18 @@ public class JWTPayloadTest {
   public void fromJsonWithEmptyLimits() {
     String jwtString = "{\"aid\":\"XYZ-01234567-89ab-cdef-0123-456789aUSER1\",\"iat\":1521982864,\"exp\":1525039199,\"limits\":{},\"urm\":{\"xyz-hub\":{\"readFeatures\":[{\"owner\":\"XYZ-01234567-89ab-cdef-0123-456789aUSER1\"}]}}}";
     JsonObject jwtJson = new JsonObject(jwtString);
-    JWTPayload jwtPayload = Json.mapper.convertValue(jwtJson,JWTPayload.class);
-    assertTrue(jwtPayload.limits instanceof  XYZUsageLimits);
+    JWTPayload jwtPayload = DatabindCodec.mapper().convertValue(jwtJson,JWTPayload.class);
+    assertNotNull(jwtPayload.limits);
     assertEquals(-1, jwtPayload.limits.maxSpaces);
     assertEquals(-1, jwtPayload.limits.maxFeaturesPerSpace);
+  }
+
+  @Test
+  public void fromJsonWithRawJWT() {
+    String jwtString = "{\"jwt\":\"raw_jwt_to_be_included\"}";
+    JsonObject jwtJson = new JsonObject(jwtString);
+    JWTPayload jwtPayload = DatabindCodec.mapper().convertValue(jwtJson,JWTPayload.class);
+    assertNotNull(jwtPayload.jwt);
+    assertEquals("raw_jwt_to_be_included", jwtPayload.jwt);
   }
 }
