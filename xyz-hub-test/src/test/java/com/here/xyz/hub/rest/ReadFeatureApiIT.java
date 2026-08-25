@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ package com.here.xyz.hub.rest;
 import static com.google.common.net.HttpHeaders.ACCEPT_ENCODING;
 import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
 import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
-import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_MODIFIED;
@@ -145,7 +144,7 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
         get(getSpacesPath() + "/x-psql-test/statistics").
         then().
         statusCode(OK.code()).
-        body("minVersion.value", equalTo(0)).
+        body("minVersion.value", equalTo(1)).
         body("maxVersion.value", equalTo(1)).
         body("count.value",  equalTo(252)).
         body("count.estimated", equalTo(false)).
@@ -163,7 +162,7 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
             get(getSpacesPath() + "/x-psql-test/statistics?fastMode=true").
             then().
             statusCode(OK.code()).
-            body("minVersion.value", equalTo(0)).
+            body("minVersion.value", equalTo(1)).
             body("maxVersion.value", equalTo(1)).
             body("count.value", equalTo(252)).
             body("count.estimated", equalTo(false)).
@@ -254,10 +253,10 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
         .when()
         .get(getSpacesPath() + "/x-psql-test/iterate?limit=500&handle=dguh45gh54g98h2gfherigfhdsfifg")
         .then()
-        .statusCode(BAD_GATEWAY.code())
+        .statusCode(BAD_REQUEST.code())
         .body("type", equalTo("ErrorResponse"))
-        .body("error", equalTo("BadGateway"))
-        .body("errorMessage", equalTo("Connector error."));
+        .body("error", equalTo("IllegalArgument"))
+        .body("errorMessage", equalTo("Error trying to decode the iteration nextPageToken."));
 
     //This special handle will (starting with xyz-psql-connector version 1.2.33) cause an error response, which must as well result in a Bad Gateway.
     given()
@@ -266,20 +265,21 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
         .when()
         .get(getSpacesPath() + "/x-psql-test/iterate?limit=500&handle=test_errorResponse_dguh45gh54g98h2gfherigfhdsfifg")
         .then()
-        .statusCode(BAD_GATEWAY.code())
+        .statusCode(BAD_REQUEST.code())
         .body("type", equalTo("ErrorResponse"))
-        .body("error", equalTo("BadGateway"))
-        .body("errorMessage", equalTo("Connector error."));
+        .body("error", equalTo("IllegalArgument"))
+        .body("errorMessage", equalTo("Error trying to decode the iteration nextPageToken."));
+
     given()
         .accept(APPLICATION_GEO_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
         .when()
         .get(getSpacesPath() + "/x-psql-test/iterate?limit=500&handle=test_exception_dguh45gh54g98h2gfherigfhdsfifg")
         .then()
-        .statusCode(BAD_GATEWAY.code())
+        .statusCode(BAD_REQUEST.code())
         .body("type", equalTo("ErrorResponse"))
-        .body("error", equalTo("BadGateway"))
-        .body("errorMessage", equalTo("Connector error."));
+        .body("error", equalTo("IllegalArgument"))
+        .body("errorMessage", equalTo("Error trying to decode the iteration nextPageToken."));
   }
 
   @Test
@@ -383,15 +383,25 @@ public class ReadFeatureApiIT extends TestSpaceWithFeature {
   @Test
   public void testFeatureByIdWithSelection() {
     given()
+        .urlEncodingEnabled(false)
         .accept(APPLICATION_GEO_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
         .when()
-        .get(getSpacesPath() + "/x-psql-test/features/Q2838923?selection=p.name").
-        then()
+        .get(getSpacesPath() + "/x-psql-test/features/Q2838923?"
+            + "selection=p.name,p.selectionTest.a,p.selectionTest.b.1,p.selectionTest.d.d1,p.selectionTest.e.1.v2")
+        .then()
         .statusCode(OK.code())
         .body("id", equalTo("Q2838923"))
         .body("properties.name", equalTo("Estadio Universidad San Marcos"))
-        .body("properties.sport", equalTo(null));
+        .body("properties.sport", equalTo(null))
+        .body("properties.selectionTest.a", equalTo("aString"))
+        .body("properties.selectionTest.b.size()", equalTo(1))
+        .body("properties.selectionTest.b[0]", equalTo("bval2"))
+        .body("properties.selectionTest.c", equalTo(null))
+        .body("properties.selectionTest.d.d1", equalTo("d1val"))
+        .body("properties.selectionTest.d.d2", equalTo(null))
+        .body("properties.selectionTest.e.size()", equalTo(1))
+        .body("properties.selectionTest.e[0].v2", equalTo("test1.1"));
   }
 
   @Test

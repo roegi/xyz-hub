@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 
 package com.here.xyz.jobs.steps.execution;
 
-import static com.here.xyz.jobs.util.AwsClients.sfnClient;
+import static com.here.xyz.jobs.util.AwsClientFactory.sfnClient;
 import static software.amazon.awssdk.services.sfn.model.StateMachineType.EXPRESS;
 import static software.amazon.awssdk.services.sfn.model.StateMachineType.STANDARD;
 
@@ -28,6 +28,7 @@ import com.here.xyz.jobs.service.Config;
 import com.here.xyz.jobs.steps.StepGraph;
 import com.here.xyz.jobs.steps.inputs.ModelBasedInput;
 import com.here.xyz.util.ARN;
+import com.here.xyz.util.Async;
 import io.vertx.core.Future;
 import java.util.Arrays;
 import org.apache.logging.log4j.LogManager;
@@ -35,19 +36,23 @@ import org.apache.logging.log4j.Logger;
 import software.amazon.awssdk.services.sfn.model.CreateStateMachineRequest;
 import software.amazon.awssdk.services.sfn.model.CreateStateMachineResponse;
 import software.amazon.awssdk.services.sfn.model.DeleteStateMachineRequest;
+import software.amazon.awssdk.services.sfn.model.ExecutionAlreadyExistsException;
 import software.amazon.awssdk.services.sfn.model.RedriveExecutionRequest;
 import software.amazon.awssdk.services.sfn.model.StartExecutionRequest;
 import software.amazon.awssdk.services.sfn.model.StartExecutionResponse;
+import software.amazon.awssdk.services.sfn.model.StateMachineAlreadyExistsException;
 import software.amazon.awssdk.services.sfn.model.StopExecutionRequest;
 
 class StateMachineExecutor extends JobExecutor {
   private static final Logger logger = LogManager.getLogger();
   private static final String STATE_MACHINE_NAME_PREFIX = "job-";
+  private static final Async ASYNC = new Async(5, Job.class);
 
   StateMachineExecutor() {}
 
   private GraphTransformer transformer(Job job) {
-    return new GraphTransformer(Config.instance.STEP_LAMBDA_ARN, job.isPipeline());
+    return new GraphTransformer(Config.instance.STEP_LAMBDA_ARN, Config.instance.STEP_LAMBDA_PIPELINE_ALIAS, job.isPipeline(),
+        Config.instance.getAlternativeStepLambdaMappings());
   }
 
   @Override
@@ -91,26 +96,26 @@ class StateMachineExecutor extends JobExecutor {
   @Override
   public Future<String> resume(Job job, String executionId) {
     logger.info("[{}] Re-driving SFN execution of job ...", job.getId());
-    try {
-      //TODO: Asyncify!
+    return ASYNC.run(() -> {
       sfnClient().redriveExecution(RedriveExecutionRequest.builder()
           .executionArn(executionId)
           .build());
-      return Future.succeededFuture(executionId);
-    }
-    catch (Exception e) {
-      return Future.failedFuture(e);
-    }
+      return executionId;
+    });
   }
 
   @Override
-  public Future<Void> cancel(String executionId) {
+  public Future<Void> cancel(String executionId, String reason) {
     try {
-      //TODO: Asyncify!
-      sfnClient().stopExecution(StopExecutionRequest.builder()
-          .executionArn(executionId)
-          .cause("CANCELLED") //TODO: Infer better cause
-          .build());
+      Future<Void> future = ASYNC.run(() -> {
+        if (executionId == null)
+          return null;
+        sfnClient().stopExecution(StopExecutionRequest.builder()
+            .executionArn(executionId)
+            .cause(reason)
+            .build());
+        return null;
+      });
 
       /*
       Start checking for cancellations to make sure the job config will be updated properly once all its steps have been properly canceled.
@@ -118,7 +123,7 @@ class StateMachineExecutor extends JobExecutor {
        */
       checkCancellations();
 
-      return Future.succeededFuture();
+      return future;
     }
     catch (Exception e) {
       return Future.failedFuture(e);
@@ -127,18 +132,22 @@ class StateMachineExecutor extends JobExecutor {
 
   @Override
   public Future<Boolean> deleteExecution(String executionId) {
+    logger.info("Delete SFN state machine {}", executionId);
+
     if (executionId == null)
       return Future.succeededFuture(false);
-    try {
-      //TODO: Asyncify!
-      sfnClient().deleteStateMachine(DeleteStateMachineRequest.builder()
-              .stateMachineArn(stateMachineArnFromExecutionId(executionId))
-              .build());
-      return Future.succeededFuture(true);
-    }
-    catch (Exception e) {
-      return Future.succeededFuture(false);
-    }
+
+    return ASYNC.run(() -> {
+      try {
+        sfnClient().deleteStateMachine(DeleteStateMachineRequest.builder()
+            .stateMachineArn(stateMachineArnFromExecutionId(executionId))
+            .build());
+        return true;
+      }
+      catch (Exception e) {
+        return false;
+      }
+    });
   }
 
   private static String stateMachineArnFromExecutionId(String executionId) {
@@ -152,32 +161,54 @@ class StateMachineExecutor extends JobExecutor {
 
   private Future<String> executeStateMachine(String jobId, String stateMachineArn, String input) {
     logger.info("[{}] Starting SFN state machine execution of job ...", jobId);
-    //TODO: Asyncify!
-
-    try {
-      StartExecutionResponse startExecutionResponse = sfnClient().startExecution(StartExecutionRequest.builder()
-          .stateMachineArn(stateMachineArn)
-          .name(jobId)
-          .input(input == null ? "{}" : input)
-          .build());
-
-      return Future.succeededFuture(startExecutionResponse.executionArn());
-    }
-    catch (Exception e) {
-      return Future.failedFuture(e);
-    }
+    return ASYNC.run(() -> {
+      try {
+        StartExecutionResponse startExecutionResponse = sfnClient().startExecution(StartExecutionRequest.builder()
+            .stateMachineArn(stateMachineArn)
+            .name(jobId)
+            .input(input == null ? "{}" : input)
+            .build());
+        return startExecutionResponse.executionArn();
+      }
+      catch (ExecutionAlreadyExistsException e) {
+        //TODO: find and fix RC
+        logger.error("[{}] SFN execution already exists. Re-using existing execution.", jobId);
+        return executionArnFromStateMachineArn(stateMachineArn, jobId);
+      }
+    });
   }
 
   private static Future<String> createStateMachine(String jobId, String stateMachineDefinition, boolean isPipeline) {
     logger.info("[{}] Creating SFN state machine of job ...", jobId);
-    //TODO: Asyncify!
+    return ASYNC.run(() -> {
+      try {
+        CreateStateMachineResponse creationResponse = sfnClient().createStateMachine(CreateStateMachineRequest.builder()
+            .name(STATE_MACHINE_NAME_PREFIX + jobId)
+            .definition(stateMachineDefinition)
+            .roleArn(Config.instance.STATE_MACHINE_ROLE)
+            .type(isPipeline ? EXPRESS : STANDARD)
+            .build());
+        return creationResponse.stateMachineArn();
+      }
+      catch (StateMachineAlreadyExistsException e) {
+        //TODO: find and fix RC
+        logger.error("[{}] SFN state machine already exists. Re-using existing state machine.", jobId);
+        return stateMachineArnFromJobId(jobId);
+      }
+    });
+  }
 
-    CreateStateMachineResponse creationResponse = sfnClient().createStateMachine(CreateStateMachineRequest.builder()
-        .name(STATE_MACHINE_NAME_PREFIX + jobId)
-        .definition(stateMachineDefinition)
-        .roleArn(Config.instance.STATE_MACHINE_ROLE)
-        .type(isPipeline ? EXPRESS : STANDARD)
-        .build());
-    return Future.succeededFuture(creationResponse.stateMachineArn());
+  private static String stateMachineArnFromJobId(String jobId) {
+    String stateMachineName = STATE_MACHINE_NAME_PREFIX + jobId;
+    return "arn:aws:states:" + Config.instance.AWS_REGION + ":" + Config.instance.STEP_LAMBDA_ARN.getAccountId()
+        + ":stateMachine:" + stateMachineName;
+  }
+
+  private static String executionArnFromStateMachineArn(String stateMachineArn, String executionName) {
+    //eg: stateMachineARN="arn:aws:states:eu-west-1:12345678:stateMachine:job-cmnwufdhix"
+    //=> stateMachineExecutionArn="arn:aws:states:eu-west-1:12345678:execution:job-cmnwufdhix:cmnwufdhix";
+    String[] parts = stateMachineArn.split(":");
+    String stateMachineName = new ARN(stateMachineArn).getResourceWithoutType();
+    return String.join(":", Arrays.asList(parts).subList(0, 5)) + ":execution:" + stateMachineName + ":" + executionName;
   }
 }

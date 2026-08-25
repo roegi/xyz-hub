@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,19 +20,19 @@
 package com.here.xyz.jobs.steps.compiler;
 
 import static com.here.xyz.events.ContextAwareEvent.SpaceContext.EXTENSION;
-import static com.here.xyz.jobs.steps.impl.transport.CopySpacePre.VERSION;
+import static com.here.xyz.jobs.steps.impl.transport.GetNextSpaceVersion.VERSION;
 
 import com.here.xyz.events.ContextAwareEvent.SpaceContext;
 import com.here.xyz.jobs.Job;
 import com.here.xyz.jobs.datasets.DatasetDescription;
-import com.here.xyz.jobs.datasets.filters.Filters;
+import com.here.xyz.filters.Filters;
 import com.here.xyz.jobs.steps.CompilationStepGraph;
 import com.here.xyz.jobs.steps.Config;
 import com.here.xyz.jobs.steps.JobCompiler.CompilationError;
 import com.here.xyz.jobs.steps.Step.InputSet;
 import com.here.xyz.jobs.steps.impl.transport.CopySpace;
 import com.here.xyz.jobs.steps.impl.transport.CopySpacePost;
-import com.here.xyz.jobs.steps.impl.transport.CopySpacePre;
+import com.here.xyz.jobs.steps.impl.transport.GetNextSpaceVersion;
 import com.here.xyz.models.hub.Ref;
 import com.here.xyz.responses.StatisticsResponse;
 import com.here.xyz.util.web.HubWebClient;
@@ -83,6 +83,12 @@ public class SpaceCopy implements JobCompilationInterceptor {
     return compile(jobId, source, target, null);
   }
 
+  private static boolean usingFilter( Filters filters )
+  {
+    return     (filters != null)
+            && (filters.getPropertyFilter() != null || filters.getSpatialFilter() != null);
+  }
+
   public static CompilationStepGraph compile(String jobId, DatasetDescription.Space source, DatasetDescription.Space target,
       Map<String, String> outputMetadata) {
     String sourceSpaceId = source.getId();
@@ -97,20 +103,33 @@ public class SpaceCopy implements JobCompilationInterceptor {
     try {
       //TODO: Parallelize statistics loading (or get rid of it completely in compiler by merging the 3 copy steps into one)
       sourceContext = hubWebClient().loadSpace(sourceSpaceId).getExtension() != null ? EXTENSION : null;
+
+      Ref versionRef = source.getVersionRef(),
+          resolvedVersionRef = hubWebClient().resolveRef(sourceSpaceId, sourceContext, versionRef);
+      if (resolvedVersionRef != null
+          && resolvedVersionRef.isRange()
+          && resolvedVersionRef.getStart().getVersion() == resolvedVersionRef.getEnd().getVersion()) {
+        return null;
+      }
+
       targetContext = hubWebClient().loadSpace(targetSpaceId).getExtension() != null ? EXTENSION : null;
       sourceStatistics = hubWebClient().loadSpaceStatistics(sourceSpaceId, sourceContext);
       targetStatistics = hubWebClient().loadSpaceStatistics(targetSpaceId, targetContext);
 
-      Ref versionRef = source.getVersionRef(),
-          resolvedVersionRef = hubWebClient().resolveRef(sourceSpaceId, sourceContext, versionRef);
 
-      CopySpacePre preCopySpace = new CopySpacePre().withSpaceId(targetSpaceId).withJobId(jobId);
+      GetNextSpaceVersion nextSpaceVersion = (GetNextSpaceVersion) new GetNextSpaceVersion()
+          .withSpaceId(targetSpaceId)
+          .withJobId(jobId);
 
       CompilationStepGraph startGraph = new CompilationStepGraph();
-      startGraph.addExecution(preCopySpace);
+      startGraph.addExecution(nextSpaceVersion);
 
       long sourceFeatureCount = sourceStatistics.getCount().getValue(),
-          targetFeatureCount = targetStatistics.getCount().getValue();
+           targetFeatureCount = targetStatistics.getCount().getValue();
+
+      long MAX_FEATURE_NOT_USING_FILTER = 220_100_000l;
+      if( MAX_FEATURE_NOT_USING_FILTER <= sourceFeatureCount && !usingFilter(filters) )
+       throw new CompilationError( String.format("too many features (%d > %d) to copy from %s ", sourceFeatureCount, MAX_FEATURE_NOT_USING_FILTER ,sourceSpaceId) );
 
       int threadCount = threadCountCalc(sourceFeatureCount, targetFeatureCount);
 
@@ -125,29 +144,40 @@ public class SpaceCopy implements JobCompilationInterceptor {
             .withPropertyFilter(filters != null ? filters.getPropertyFilter() : null)
             .withSpatialFilter(filters != null ? filters.getSpatialFilter() : null)
             .withThreadInfo(new int[]{threadId, threadCount})
+            .withEstimatedTargetFeatureCount(targetFeatureCount)
             .withJobId(jobId)
-            .withInputSets(List.of(new InputSet(preCopySpace.getOutputSet(VERSION))));
+            .withInputSets(List.of(new InputSet(nextSpaceVersion.getOutputSet(VERSION))));
 
         copyGraph.addExecution(copySpaceStep).withParallel(true);
       }
 
       if(copyGraph.size() == 0)
-       throw new CompilationError("None of provided Layer contains a valid sourceVersion" );
+        throw new CompilationError("None of provided Layer contains a valid sourceVersion");
 
       startGraph.addExecution(copyGraph);
 
       if (outputMetadata == null)
         outputMetadata = Map.of(target.getClass().getSimpleName().toLowerCase(), targetSpaceId);
 
+      long DROPCREATEINDEX_THRESHOLD = 4_000_000;
+      long SKIPCOUNT_THRESHOLD = 50_000;
+
       CopySpacePost postCopySpace = new CopySpacePost()
           .withSpaceId(targetSpaceId)
           .withJobId(jobId)
           .withOutputMetadata(outputMetadata)
-          .withInputSets(List.of(new InputSet(preCopySpace.getOutputSet(VERSION))));
+          .withInputSets(List.of(new InputSet(nextSpaceVersion.getOutputSet(VERSION))))
+          .withSkipCounts( sourceFeatureCount >= SKIPCOUNT_THRESHOLD );
 
       startGraph.addExecution(postCopySpace);
 
-      return startGraph;
+      boolean useDropIndexOptimization =    sourceFeatureCount >= DROPCREATEINDEX_THRESHOLD
+                                            // target is empty and no filtering
+                                         && targetFeatureCount <= 0
+                                         && filters == null;
+
+      return !useDropIndexOptimization ? startGraph : ImportFromFiles.compileWrapWithDropRecreateIndices(targetSpaceId, startGraph);
+
     }
     catch (WebClientException e) {
       throw new CompilationError("Error resolving resource information: " + e.getMessage(), e);

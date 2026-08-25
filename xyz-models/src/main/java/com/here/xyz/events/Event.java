@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,6 +47,7 @@ import java.util.Set;
  */
 @JsonSubTypes({
     @JsonSubTypes.Type(value = ModifySpaceEvent.class, name = "ModifySpaceEvent"),
+    @JsonSubTypes.Type(value = ModifyBranchEvent.class, name = "ModifyBranchEvent"),
     @JsonSubTypes.Type(value = ModifySubscriptionEvent.class, name = "ModifySubscriptionEvent"),
     @JsonSubTypes.Type(value = ModifyFeaturesEvent.class, name = "ModifyFeaturesEvent"),
     @JsonSubTypes.Type(value = WriteFeaturesEvent.class, name = "WriteFeaturesEvent"),
@@ -436,5 +437,13 @@ public abstract class Event<T extends Event> extends Payload {
       if (containsKey(QUERY_PARAMS)) return getQueryParams().get(name);
       return null;
     }
+  }
+
+  public boolean canExecuteOnReplica() {
+    return false;
+  }
+
+  public boolean executeOnPrimary() {
+    return !canExecuteOnReplica() || preferPrimaryDataSource;
   }
 }

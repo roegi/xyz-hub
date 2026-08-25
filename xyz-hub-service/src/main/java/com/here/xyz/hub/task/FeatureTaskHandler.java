@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ package com.here.xyz.hub.task;
 
 import static com.here.xyz.events.ContextAwareEvent.SpaceContext.DEFAULT;
 import static com.here.xyz.events.ContextAwareEvent.SpaceContext.SUPER;
+import static com.here.xyz.events.GetFeaturesByTileEvent.ResponseType.BINARY;
 import static com.here.xyz.hub.rest.ApiResponseType.MVT;
 import static com.here.xyz.hub.rest.ApiResponseType.MVT_FLATTENED;
 import static com.here.xyz.hub.task.FeatureTask.FeatureKey.BBOX;
@@ -35,7 +36,6 @@ import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.CONFLICT;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
-import static io.netty.handler.codec.http.HttpResponseStatus.METHOD_NOT_ALLOWED;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.PRECONDITION_REQUIRED;
 
@@ -59,7 +59,6 @@ import com.here.xyz.events.SelectiveEvent;
 import com.here.xyz.hub.Service;
 import com.here.xyz.hub.XYZHubRESTVerticle;
 import com.here.xyz.hub.cache.CacheClient;
-import com.here.xyz.hub.config.TagConfigClient;
 import com.here.xyz.hub.connectors.RpcClient;
 import com.here.xyz.hub.connectors.RpcClient.RpcContext;
 import com.here.xyz.hub.connectors.models.Connector;
@@ -72,6 +71,7 @@ import com.here.xyz.hub.connectors.models.Space.ResolvableListenerConnectorRef;
 import com.here.xyz.hub.rest.Api;
 import com.here.xyz.hub.rest.ApiParam;
 import com.here.xyz.hub.rest.ApiResponseType;
+import com.here.xyz.hub.rest.FeatureApi;
 import com.here.xyz.hub.task.FeatureTask.ConditionalOperation;
 import com.here.xyz.hub.task.FeatureTask.ReadQuery;
 import com.here.xyz.hub.task.FeatureTask.TileQuery;
@@ -89,8 +89,8 @@ import com.here.xyz.models.geojson.implementation.FeatureCollection;
 import com.here.xyz.models.geojson.implementation.FeatureCollection.ModificationFailure;
 import com.here.xyz.models.geojson.implementation.XyzNamespace;
 import com.here.xyz.models.hub.Ref;
-import com.here.xyz.models.hub.Ref.InvalidRef;
 import com.here.xyz.models.hub.Space.Extension;
+import com.here.xyz.models.hub.Tag;
 import com.here.xyz.models.hub.jwt.JWTPayload;
 import com.here.xyz.responses.BinaryResponse;
 import com.here.xyz.responses.ErrorResponse;
@@ -201,6 +201,7 @@ public class FeatureTaskHandler {
      * @see Task#consumeEvent()
      */
     Event event = task.consumeEvent();
+    boolean isErase = event instanceof ModifyFeaturesEvent mfe && mfe.isEraseContent();
 
     if (!task.storage.active) {
       if (event instanceof ModifySpaceEvent && ((ModifySpaceEvent) event).getOperation() == ModifySpaceEvent.Operation.DELETE) {
@@ -307,14 +308,10 @@ public class FeatureTaskHandler {
 
       //Update the contentUpdatedAt timestamp to indicate that the data in this space was modified
       if (task instanceof FeatureTask.ConditionalOperation) {
-        long now = Core.currentTimeMillis();
-        if (now - task.space.getContentUpdatedAt() > Space.CONTENT_UPDATED_AT_INTERVAL_MILLIS) {
-          task.space.setContentUpdatedAt(Core.currentTimeMillis());
-          task.space.volatilityAtLastContentUpdate = task.space.getVolatility();
-          Service.spaceConfigClient.store(task.getMarker(), task.space)
-              .onSuccess(v -> logger.info(task.getMarker(), "Updated contentUpdatedAt for space {}", task.space.getId()))
-              .onFailure(t -> logger.error(task.getMarker(), "Error while updating contentUpdatedAt for space {}", task.space.getId(), t));
-        }
+        if (isErase)
+          task.space.resetTimestamps(task.getMarker());
+        else
+          task.space.updateContentUpdatedAt(task.getMarker());
       }
       //Send event to potentially registered request-listeners
       if (requestListenerPayload != null)
@@ -773,38 +770,6 @@ public class FeatureTaskHandler {
     return f;
   }
 
-  static <X extends FeatureTask> void resolveVersionRef(final X task, final Callback<X> callback) {
-    if (!(task.getEvent() instanceof SelectiveEvent event)) {
-      callback.call(task);
-      return;
-    }
-
-    if (event.getRef() == null || !event.getRef().isTag()) {
-      callback.call(task);
-      return;
-    }
-
-    TagConfigClient.getInstance().getTag(task.getMarker(), event.getRef().getTag(), task.space.getId())
-        .compose(tag -> {
-          if (tag == null) {
-            return Future.failedFuture(new HttpException(BAD_REQUEST, "Version ref not found: " + event.getRef().getTag()));
-          }
-
-          try {
-            event.setRef(new Ref(tag.getVersion()));
-          } catch (InvalidRef e) {
-            return Future.failedFuture(new HttpException(BAD_REQUEST, "Invalid version ref: " + event.getRef().getTag()));
-          }
-
-          return Future.succeededFuture(tag);
-        })
-        .onSuccess(tag -> callback.call(task))
-        .onFailure(t -> {
-          logger.error(task.getMarker(), "Error while resolving version ref.", t);
-          callback.exception(t instanceof HttpException ? t : new HttpException(INTERNAL_SERVER_ERROR, "Error while resolving version ref.", t));
-        });
-  }
-
   private static class RpcContextHolder {
     RpcContext rpcContext;
   }
@@ -955,10 +920,16 @@ public class FeatureTaskHandler {
 
     final String storageId = task.space.getStorage().getId();
     XYZHubRESTVerticle.addStreamInfo(task.context, "SID", storageId);
-    return Space.resolveConnector(task.getMarker(), storageId)
+    return task.space.resolveStorage(task.getMarker())
         .compose(
             connector -> {
               task.storage = connector;
+
+              if (connector.capabilities.binaryTiles && task.getEvent() instanceof GetFeaturesByTileEvent getTileEvent) {
+                getTileEvent.setResponseType(BINARY);
+                task.responseType = ApiResponseType.BINARY;
+              }
+
               return Future.succeededFuture(connector);
             },
             t -> Future.failedFuture(new InvalidStorageException("Unable to load the definition for this storage."))
@@ -1040,7 +1011,7 @@ public class FeatureTaskHandler {
 
     try {
       List<Map<String, Object>> featureModifications = getFeatureModifications(task);
-      List<FeatureEntry> featureEntries = ModifyFeatureOp.convertToFeatureEntries(featureModifications, task.ifNotExists, task.ifExists, task.conflictResolution);
+      List<FeatureEntry> featureEntries = ModifyFeatureOp.convertToFeatureEntries(featureModifications, task.ifNotExists, task.ifExists, task.conflictResolution, task.getEvent().getRef());
       task.modifyOp = new ModifyFeatureOp(featureEntries, task.transactional);
       callback.call(task);
     } catch (HttpException e) {
@@ -1175,6 +1146,7 @@ public class FeatureTaskHandler {
 
   static void processConditionalOp(ConditionalOperation task, Callback<ConditionalOperation> callback) throws Exception {
     try {
+
       task.modifyOp.process();
       final List<Feature> insert = new ArrayList<>();
       final List<Feature> update = new ArrayList<>();
@@ -1241,7 +1213,9 @@ public class FeatureTaskHandler {
       task.getEvent().setFailed(fails);
 
       // In case nothing was changed, set the response directly to skip calling the storage connector.
-      if (insert.size() == 0 && update.size() == 0 && delete.size() == 0) {
+      boolean eraseContent = FeatureApi.eraseContent( task.context );
+
+      if (!eraseContent && insert.size() == 0 && update.size() == 0 && delete.size() == 0) {
         FeatureCollection fc = new FeatureCollection();
         if( task.hasNonModified ){
           task.modifyOp.entries.stream().filter(e -> !e.isModified).forEach(e -> {
@@ -1509,10 +1483,21 @@ public class FeatureTaskHandler {
       if (task.getResponse() instanceof StatisticsResponse) {
         //Ensure the StatisticsResponse is correctly set-up
         StatisticsResponse response = (StatisticsResponse) task.getResponse();
-        defineGlobalSearchableField(response, task);
-        defineContentUpdatedAtField(response, (FeatureTask.GetStatistics) task)
-                .onSuccess(r -> callback.call(task))
-                .onFailure(callback::exception);
+
+        getMinTagVersion(task.getMarker(), task.space.getId())
+                .onSuccess(minTagVersion -> {
+                  //Override minVersion if it is set in the space config and if it is higher than the one in the response
+                  response.getMinVersion().setValue(Math.max(task.space.getMinVersion(),
+                          response.getMaxVersion().getValue() - task.space.getVersionsToKeep() + 1));
+
+                  if(minTagVersion != null)
+                    response.getMinVersion().setValue(Math.min(minTagVersion, response.getMinVersion().getValue()));
+
+                  defineGlobalSearchableField(response, task);
+                  defineContentUpdatedAtField(response, (FeatureTask.GetStatistics) task)
+                          .onSuccess(r -> callback.call(task))
+                          .onFailure(callback::exception);
+                }).onFailure(callback::exception);
         return;
       }
     } else if (task instanceof FeatureTask.IdsQuery) {
@@ -1523,6 +1508,15 @@ public class FeatureTaskHandler {
       }
     }
     callback.call(task);
+  }
+
+  protected static Future<Long> getMinTagVersion(Marker marker, String spaceId) {
+    return Service.tagConfigClient.getTags(marker, spaceId, true)
+        .map(tags -> {
+          if (tags == null || tags.isEmpty())
+            return null;
+          return tags.stream().mapToLong(Tag::getVersion).min().orElseThrow();
+        });
   }
 
   private static void defineGlobalSearchableField(StatisticsResponse response, FeatureTask task) {
@@ -1740,6 +1734,26 @@ public class FeatureTaskHandler {
     if (task.modifyOp != null && task.modifyOp.entries != null)
       task.unmodifiedFeatures = task.modifyOp.entries.stream().filter(e -> !e.isModified).map(fe -> fe.result).collect(Collectors.toList());
     callback.call(task);
+  }
+
+  static void injectMinVersion(final ConditionalOperation task, final Callback<ConditionalOperation> callback) {
+    if (task.getEvent() instanceof ModifyFeaturesEvent)
+      injectMinVersion(task.getMarker(), task.space.getId(), task.getEvent())
+          .onSuccess(tag -> callback.call(task))
+          .onFailure(t -> {
+            logger.error(task.getMarker(), "Error while injecting minVersion into event.", t);
+            callback.exception(t instanceof HttpException ? t : new HttpException(INTERNAL_SERVER_ERROR, "Unexpected error.", t));
+          });
+  }
+
+  public static Future<Long> injectMinVersion(Marker marker, String spaceId, ContextAwareEvent event) {
+    return getMinTagVersion(marker, spaceId)
+        .onSuccess(minTagVersion -> {
+          if (minTagVersion != null)
+            event.setMinVersion(minTagVersion);
+          else
+            event.setMinVersion(-1l);
+        });
   }
 
   private static SnsAsyncClient getSnsClient() {

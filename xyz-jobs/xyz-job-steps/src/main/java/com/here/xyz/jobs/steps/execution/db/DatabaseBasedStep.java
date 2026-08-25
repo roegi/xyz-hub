@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,6 +56,22 @@ public abstract class DatabaseBasedStep<T extends DatabaseBasedStep> extends Lam
   @JsonView(Internal.class)
   private List<RunningQuery> runningQueries = new ArrayList<>();
 
+  private static final int MAXIMUM_RETRIES = 10;
+  private static final Set<String> RETRYABLE_SQL_CODES = Set.of(
+          "40001", // serialization_failure
+          "40P01", // deadlock_detected
+          "55P03", // lock_not_available
+          "23505", // unique_violation
+          "23P01", // exclusion_violation, same caveat
+          "53300", // too_many_connections
+          "08000", // connection_exception
+          "08001", // sqlclient_unable_to_establish_sqlconnection
+          "08003", // connection_does_not_exist
+          "08006", // connection_failure
+          "08004", // sqlserver_rejected_establishment_of_sqlconnection
+          "57P01"  // admin_shutdown
+  );
+
   @Override
   protected final void onRuntimeShutdown() {
     super.onRuntimeShutdown();
@@ -90,16 +106,32 @@ public abstract class DatabaseBasedStep<T extends DatabaseBasedStep> extends Lam
     return (int) executeQuery(query, db, estimatedMaxAcuLoad, null, true, false, false);
   }
 
+  protected final int runWriteQuerySyncUnkillable(SQLQuery query, Database db, double estimatedMaxAcuLoad) throws TooManyResourcesClaimed,
+          SQLException {
+    return (int) executeQuery(query, db, estimatedMaxAcuLoad, null, true, false, false, false);
+  }
+
   protected final int[] runBatchWriteQuerySync(SQLQuery query, Database db, double estimatedMaxAcuLoad) throws TooManyResourcesClaimed,
       SQLException {
     return (int[]) executeQuery(query, db, estimatedMaxAcuLoad, null, true, false, false);
   }
 
+  protected final int[] runBatchWriteQuerySyncUnkillable(SQLQuery query, Database db, double estimatedMaxAcuLoad) throws TooManyResourcesClaimed,
+          SQLException {
+    return (int[]) executeQuery(query, db, estimatedMaxAcuLoad, null, true, false, false, false);
+  }
+
   private Object executeQuery(SQLQuery query, Database db, double estimatedMaxAcuLoad, ResultSetHandler<?> resultSetHandler,
-      boolean isWriteQuery, boolean async, boolean withCallbacks) throws TooManyResourcesClaimed, SQLException {
-    query
-        .withLabel("jobId", getJobId())
-        .withLabel("stepId", getId());
+                              boolean isWriteQuery, boolean async, boolean withCallbacks) throws TooManyResourcesClaimed, SQLException {
+    return executeQuery(query, db, estimatedMaxAcuLoad, resultSetHandler, isWriteQuery, async, withCallbacks, true);
+  }
+
+  private Object executeQuery(SQLQuery query, Database db, double estimatedMaxAcuLoad, ResultSetHandler<?> resultSetHandler,
+      boolean isWriteQuery, boolean async, boolean withCallbacks, boolean killable) throws TooManyResourcesClaimed, SQLException {
+    if (killable)
+      query
+          .withLabel("jobId", getJobId())
+          .withLabel("stepId", getId());
 
     if (async) {
       query = (withCallbacks ? wrapQuery(query) : query)
@@ -107,8 +139,15 @@ public abstract class DatabaseBasedStep<T extends DatabaseBasedStep> extends Lam
           .withTimeout(10)
           .withLabel(ASYNC_STEP_ID, getId());
     }
-    else if (query.getTimeout() == Integer.MAX_VALUE)
-      query.setTimeout(300);
+    else {
+      if (query.getTimeout() == Integer.MAX_VALUE)
+        query.setTimeout(300);
+
+      //Add retry settings for synchronous queries.
+      query
+          .withRetryableErrorCodes(RETRYABLE_SQL_CODES)
+          .withMaximumRetries(MAXIMUM_RETRIES);
+    }
 
     Object result;
     if (query.isBatch() && isWriteQuery)
@@ -192,7 +231,7 @@ public abstract class DatabaseBasedStep<T extends DatabaseBasedStep> extends Lam
                   jsonb_set(
                     '${{failureRequestBody}}'::JSONB,
                     '{step, status}',
-                    ('${{failureRequestBody}}'::JSONB->'step'->'status' || format('{"errorCode": "%1$s", "errorMessage": "%2$s"}', SQLSTATE, SQLERRM)::JSONB),
+                    ('${{failureRequestBody}}'::JSONB->'step'->'status' || format('{"errorCode": %1$s, "errorMessage": %2$s}', to_json(SQLSTATE::TEXT), to_json(SQLERRM::TEXT))::JSONB),
                     true
                   )::JSON, 'Event');
             """) //TODO: Inject fields directly in memory rather than writing and deserializing new JSON object
@@ -214,19 +253,28 @@ public abstract class DatabaseBasedStep<T extends DatabaseBasedStep> extends Lam
     return db.getDatabaseSettings().getSchema();
   }
 
-  protected SQLQuery buildCopyQueryRemoteSpace( Database remoteDb, SQLQuery contentQuery) {
+  protected SQLQuery buildCopyQueryRemoteSpace( Database remoteDb, SQLQuery contentQuery, boolean emptyTargetTable) {
 
       DatabaseSettings dbSettings = remoteDb.getDatabaseSettings();
 
       contentQuery =
        new SQLQuery(
-          """
+        !emptyTargetTable
+        ? """
             select t.* 
             from 
             dblink( $icnt$ host=${{rmtHost}} dbname=${{rmtDb}} user=${{rmtUsr}} password=${{rmtPwd}} $icnt$, 
                     $iqry$ select jsondata, jsondata#>>'{properties,@ns:com:here:xyz,author}' as author, geo from ( ${{innerContentQuery}} ) rcopy $iqry$
                   ) 
             as t( jsondata jsonb, author text, geo text )
+           """
+         : """
+            select t.* 
+            from 
+            dblink( $icnt$ host=${{rmtHost}} dbname=${{rmtDb}} user=${{rmtUsr}} password=${{rmtPwd}} $icnt$, 
+                    $iqry$ select id, operation, author, jsondata, geo from ( ${{innerContentQuery}} ) rcopy $iqry$
+                  ) 
+            as t( id text, operation character(1), author text, jsondata jsonb, geo geometry )
            """
        )
        .withQueryFragment("innerContentQuery", contentQuery)

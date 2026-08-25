@@ -21,7 +21,11 @@ CREATE EXTENSION IF NOT EXISTS plv8;
 
 /**
  * @public
+ * @param {string} json_input The actual payload(s) (of the type that is specified by parameter input_type) to be written by the FeatureWriter
  * @param {string} input_type The type of the JSON input. Possible values: "FeatureCollection", "Features", "Feature", "Modifications"
+ * @param {string} author The ID of the user that is committing the change
+ * @param {boolean} return_result = false Whether to return all data that has been actually written. If `false` is specified, only an object containing the written count is returned like: `{"count": 42}`
+ * @param {number} version = null The version number to be used for the change. That must be a version larger than the current HEAD version or the current HEAD version. If not specified, HEAD + 1 will be used by default
  * @throws VersionConflictError, MergeConflictError, FeatureExistsError
  */
 CREATE OR REPLACE FUNCTION write_features(json_input TEXT, input_type TEXT, author TEXT, return_result BOOLEAN = false, version BIGINT = NULL,
@@ -29,6 +33,7 @@ CREATE OR REPLACE FUNCTION write_features(json_input TEXT, input_type TEXT, auth
     on_exists TEXT = NULL, on_not_exists TEXT = NULL, on_version_conflict TEXT = NULL, on_merge_conflict TEXT = NULL, is_partial BOOLEAN = false)
     RETURNS TEXT AS
 $BODY$
+    ${{Exception.js}}
     try {
       //Actual executions
       if (json_input == null)
@@ -46,9 +51,12 @@ $BODY$
         return _queryContext;
       };
 
+      // load required js libs
+      // plv8.execute("SELECT require( 'jsonpath_rfc9535' )");
+
       //Init block of internal feature_writer functionality
-      ${{Exception.js}}
       ${{FeatureWriter.js}}
+      ${{DatabaseWriter.js}}
       //Init completed
 
       let input = JSON.parse(json_input);
@@ -68,7 +76,7 @@ $BODY$
       else
         throw new Error("Invalid input_type: " + input_type);
 
-      return JSON.stringify(return_result ? result : {"count": result.features.length});
+      return JSON.stringify(return_result ? result : {count: result.features.length, conflicting: result.conflicting.length});
     }
     catch (error) {
       if (!error.code)

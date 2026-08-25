@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2025 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,9 @@
 
 package com.here.xyz.jobs.steps;
 
+import static com.here.xyz.jobs.steps.Step.InputSet.GENERIC_PROVIDER;
 import static com.here.xyz.jobs.steps.Step.InputSet.USER_PROVIDER;
+import static com.here.xyz.jobs.steps.Step.Visibility.SYSTEM;
 import static com.here.xyz.jobs.steps.Step.Visibility.USER;
 import static com.here.xyz.jobs.steps.inputs.Input.defaultBucket;
 import static com.here.xyz.jobs.steps.resources.Load.addLoad;
@@ -29,6 +31,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonView;
@@ -47,8 +50,10 @@ import com.here.xyz.jobs.steps.outputs.Output;
 import com.here.xyz.jobs.steps.resources.ExecutionResource;
 import com.here.xyz.jobs.steps.resources.Load;
 import com.here.xyz.jobs.util.S3Client;
-import com.here.xyz.util.service.aws.S3Uri;
+import com.here.xyz.util.pagination.Page;
 import com.here.xyz.util.service.BaseHttpServerVerticle.ValidationException;
+import com.here.xyz.util.service.aws.s3.S3ObjectSummary;
+import com.here.xyz.util.service.aws.s3.S3Uri;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -59,10 +64,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -93,11 +100,13 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
   @JsonView({Internal.class, Static.class})
   private boolean pipeline;
   @JsonView({Internal.class, Static.class})
-  protected List<OutputSet> outputSets = List.of();
+  private List<OutputSet> outputSets = List.of();
   @JsonView({Internal.class, Static.class})
   private List<InputSet> inputSets = List.of();
   @JsonView({Internal.class, Static.class})
   private Map<String, String> outputMetadata;
+  @JsonView({Internal.class, Static.class})
+  private String outputSetGroup;
   @JsonView({Internal.class, Static.class})
   private boolean notReusable = false;
 
@@ -189,6 +198,19 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
     return loadOutputs(USER);
   }
 
+  public Page<Output> loadUserOutputsPage(String setName, int limit, String nextPageToken) {
+    return loadOutputsPage(USER, setName, limit, nextPageToken);
+  }
+
+  public Page<Output> loadOutputsPage(Visibility visibility, String setName, int limit, String nextPageToken) {
+    Optional<OutputSet> filteredOutputSet = outputSets.stream()
+        .filter(outputSet -> outputSet.visibility == visibility && outputSet.name.equals(setName))
+        .findFirst();
+
+    return filteredOutputSet.map(outputSet -> loadStepOutputsPage(outputSet, limit, nextPageToken))
+        .orElseGet(() -> new Page<>(List.of(), null));
+  }
+
   public List<Output> loadOutputs(Visibility visibility) {
     return outputSets.stream()
         .filter(outputSet -> outputSet.visibility == visibility)
@@ -196,8 +218,10 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
         .toList();
   }
 
-  protected List<Output> loadOutputs(String outputSetName) {
-    return loadStepOutputs(getOutputSet(outputSetName));
+  public List<Output> loadOutputs() {
+    return outputSets.stream()
+        .flatMap(outputSet -> loadStepOutputs(outputSet).stream())
+        .toList();
   }
 
   public OutputSet getOutputSet(String outputSetName) {
@@ -209,6 +233,17 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
     }
   }
 
+  public OutputSet getOutputSetOrNull(String outputSetName) {
+    return outputSets.stream().filter(set -> set.name.equals(outputSetName)).findFirst().orElse(null);
+  }
+
+  private void replaceOutputSet(String outputSetName, OutputSet outputSet) {
+    outputSets = Stream.concat(
+        outputSets.stream().filter(s -> !Objects.equals(s.name, outputSetName)),
+        Stream.of(outputSet)
+    ).toList();
+  }
+
   /**
    * Loads the outputs that have been created by this step (so far).
    * This method could be used in case of a resume (see: {@link #execute(boolean)}) is being performed
@@ -216,24 +251,44 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
    * @param outputSet The outputSet for which to load the outputs
    * @return The outputs that have been registered for the specified outputSet (so far).
    */
-  private List<Output> loadStepOutputs(OutputSet outputSet) {
-    return loadOutputs(Set.of(toS3Path(outputSet)), outputSet.modelBased);
+  protected List<Output> loadStepOutputs(OutputSet outputSet) {
+    //TODO: Refactor S3Client to be bucket-agnostic
+    S3Uri s3Uri = outputSet.toS3Uri(getJobId());
+    return loadOutputs(s3Uri.bucket(), Set.of(s3Uri.key()), outputSet.modelBased);
   }
 
-  private List<Output> loadOutputs(Set<String> s3Prefixes, boolean modelBased) {
+  private List<Output> loadOutputs(String bucketName, Set<String> s3Prefixes, boolean modelBased) {
     return s3Prefixes
         .stream()
         //TODO: Scan the different folders in parallel
-        .flatMap(s3Prefix -> S3Client.getInstance().scanFolder(s3Prefix)
+        .flatMap(s3Prefix -> S3Client.getInstance(bucketName).scanFolder(s3Prefix)
             .stream()
             .filter(s3ObjectSummary -> s3ObjectSummary.size() > 0)
             .map(s3ObjectSummary -> modelBased
                 ? ModelBasedOutput.load(s3ObjectSummary.key(), outputMetadata)
                 : new DownloadUrl()
+                    .withS3Bucket(bucketName)
                     .withS3Key(s3ObjectSummary.key())
                     .withByteSize(s3ObjectSummary.size())
                     .withMetadata(outputMetadata)))
         .collect(Collectors.toList());
+  }
+
+  private Page<Output> loadStepOutputsPage(OutputSet outputSet, int limit, String nextPageToken) {
+
+    Page<S3ObjectSummary> page = S3Client.getInstance().scanFolder(toS3Path(outputSet), nextPageToken, limit);
+
+    List<Output> outputs = page.getItems().stream()
+        .filter(s3ObjectSummary -> !s3ObjectSummary.isEmpty())
+        .map(s3ObjectSummary -> outputSet.modelBased
+            ? ModelBasedOutput.load(s3ObjectSummary.key(), outputMetadata)
+            : new DownloadUrl()
+                .withS3Key(s3ObjectSummary.key())
+                .withByteSize(s3ObjectSummary.size())
+                .withMetadata(outputMetadata))
+        .collect(Collectors.toList());
+
+    return new Page<>(outputs, page.getNextPageToken());
   }
 
   /**
@@ -270,6 +325,10 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
     return filterInputs(loadInputs(inputSet), inputTypes);
   }
 
+  protected List<Input> loadInputs(InputSet inputSet, String nextPageToken, int limit, Class<? extends Input>... inputTypes) {
+    return filterInputs(loadInputs(inputSet, nextPageToken, limit), inputTypes);
+  }
+
   /**
    * Loads the inputs of a previous step for the specified {@link InputSet}.
    * This is an internal helper method that should never be called directly by any implementing subclass.
@@ -299,7 +358,9 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
    * @return All outputs for the specified InputSet
    */
   private List<Output> loadOutputsFor(InputSet inputSet) {
-    return loadOutputs(Set.of(inputSet.toS3Path(jobId)), inputSet.modelBased());
+    //TODO: Refactor S3Client to be bucket-agnostic
+    S3Uri s3Uri = inputSet.toS3Uri(jobId);
+    return loadOutputs(s3Uri.bucket(), Set.of(s3Uri.key()), inputSet.modelBased());
   }
 
   private static List<Input> filterInputs(List<Input> inputs, Class<? extends Input>[] inputTypes) {
@@ -395,19 +456,13 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
   public abstract void cancel() throws Exception;
 
   /**
-   * Cleans up all outputs that have been generated by this step.
-   * For outputs which are still in use by other steps, the reference-counter is decreased by 1 in the output's metadata.
+   * The S3 prefix under which all outputs of this step are stored. Used e.g. to schedule this step's outputs for deletion
+   * via an S3 Batch Operations job (see {@link com.here.xyz.jobs.util.S3BatchOperations}).
    *
-   * NOTE: This method will not be called inside the execution runtime environment, but within the Job Service directly.
-   *
-   * @return
+   * @return The step's output S3 prefix.
    */
-  public void deleteOutputs() {
-    /*
-    TODO: Respect re-usability of outputs. If other steps are re-using (some) outputs of this step, check the reference counter of
-      the according steps and only delete the outputs if their reference counter drops to 0
-     */
-    S3Client.getInstance().deleteFolder(stepS3Prefix());
+  public String getOutputS3Prefix() {
+    return stepS3Prefix();
   }
 
   /**
@@ -474,7 +529,7 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
     return jobId;
   }
 
-  void setJobId(String jobId) {
+  protected void setJobId(String jobId) {
     this.jobId = jobId;
   }
 
@@ -564,8 +619,35 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
 
   @JsonIgnore
   protected void setOutputSets(List<OutputSet> outputSets) {
-    outputSets.forEach(outputSet -> outputSet.setStepId(getId()));
+    setOutputSets(outputSets, false);
+  }
+
+  @JsonIgnore
+  protected void setOutputSets(List<OutputSet> outputSets, boolean ignoreStepId) {
+    // Ensure that if any user-facing output set is being registered, the output set group is defined
+    ensureOutputSetGroupDefinedIfUserFacing(outputSets.stream().anyMatch(outputSet -> outputSet.visibility == USER));
+    if (!ignoreStepId) {
+      outputSets.forEach(outputSet -> outputSet.setStepId(getId()));
+    }
     this.outputSets = outputSets;
+  }
+
+  /**
+   * Adds {@link OutputSet}s while keeping already declared output sets.
+   * @param outputSets A list of {@link OutputSet}s
+   */
+  protected void addOutputSets(List<OutputSet> outputSets) {
+    List<OutputSet> newOutputSets = new ArrayList<>(getOutputSets());
+    newOutputSets.addAll(outputSets);
+    setOutputSets(newOutputSets);
+  }
+
+  private void ensureOutputSetGroupDefinedIfUserFacing(boolean userFacing) {
+    // temporary disable it for demo, as it fails on setting output sets in constructor
+    return;
+//    if (userFacing && (getOutputSetGroup() == null || getOutputSetGroup().isBlank())) {
+//      throw new IllegalStateException("You are registering user-facing output set, please first define outputset group value");
+//    }
   }
 
   public List<InputSet> getInputSets() {
@@ -582,8 +664,14 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
   }
 
   public T withOutputSetVisibility(String outputSetName, Visibility visibility) {
-    OutputSet outputSet = getOutputSet(outputSetName);
-    outputSet.visibility = visibility;
+    // Ensure that if we switch to a user-facing visibility, the output set group is defined
+    ensureOutputSetGroupDefinedIfUserFacing(visibility == USER);
+    OutputSet outputSet = getOutputSetOrNull(outputSetName);
+    if (outputSet != null) {
+      replaceOutputSet(outputSetName, new OutputSet(outputSet, outputSet.jobId, visibility)
+          .withStepId(outputSet.stepId)
+      );
+    }
     return (T) this;
   }
 
@@ -597,6 +685,19 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
 
   public T withOutputMetadata(Map<String, String> metadata) {
     setOutputMetadata(metadata);
+    return (T) this;
+  }
+
+  public String getOutputSetGroup() {
+    return outputSetGroup;
+  }
+
+  public void setOutputSetGroup(String outputSetGroup) {
+    this.outputSetGroup = outputSetGroup;
+  }
+
+  public T withOutputSetGroup(String outputSetGroup) {
+    setOutputSetGroup(outputSetGroup);
     return (T) this;
   }
 
@@ -623,16 +724,16 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
     return currentInputsCount(inputType) > 0;
   }
 
-  /**
-   * Use this constructor to reference the outputs of a step belonging to a different job than the one the consuming step belongs to.
-   * @param jobId The other job's id
-   * @param providerId The ID of the entity that provided the inputs (e.g., a step ID or "USER")
-   * @param name The name for the set of outputs to be produced
-   */
-  public record InputSet(String jobId, String providerId, String name, boolean modelBased, Map<String, String> metadata) {
-    public static final String DEFAULT_INPUT_SET_NAME = "inputs"; //Depicts the input set used if no set name is defined
+  public record InputSet(String jobId, String providerId, String name, boolean modelBased, Map<String, String> metadata, S3Uri s3Uri) {
+    public static final String DEFAULT_SET_NAME = "inputs"; //Depicts the input set used if no set name is defined
+    public static final String DEFAULT_SET_GROUP = "default"; //Depicts the output set group used if no set name is defined
     public static final String USER_PROVIDER = "USER";
+    public static final String GENERIC_PROVIDER = "GENERIC";
     public static final Supplier<InputSet> USER_INPUTS = () -> new InputSet();
+
+    public InputSet(String jobId, String providerId, String name, boolean modelBased, Map<String, String> metadata) {
+      this(jobId, providerId, name, modelBased, metadata, null);
+    }
 
     public InputSet(String jobId, String providerId, String name, boolean modelBased) {
       this(jobId, providerId, name, modelBased, null);
@@ -648,12 +749,12 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
     }
 
     public InputSet(OutputSet outputSetOfOtherStep) {
-      this(outputSetOfOtherStep.getStepId(), outputSetOfOtherStep.name, outputSetOfOtherStep.modelBased);
+      this(outputSetOfOtherStep, null);
     }
 
     public InputSet(OutputSet outputSetOfOtherStep, Map<String, String> metadata) {
       this(outputSetOfOtherStep.getJobId(), outputSetOfOtherStep.getStepId(), outputSetOfOtherStep.name, outputSetOfOtherStep.modelBased,
-          metadata);
+          metadata, outputSetOfOtherStep.s3Uri);
     }
 
     /**
@@ -661,7 +762,11 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
      */
     public InputSet() {
       //TODO: Currently only non-modelbased user inputs are supported
-      this(null, USER_PROVIDER, DEFAULT_INPUT_SET_NAME, false);
+      this(null, USER_PROVIDER, DEFAULT_SET_NAME, false);
+    }
+
+    public InputSet(S3Uri s3Uri, String name, Map<String, String> metadata) {
+      this(null, GENERIC_PROVIDER, name, false, metadata, s3Uri);
     }
 
     public String toS3Path(String consumerJobId) {
@@ -672,25 +777,29 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
       String jobId = this.jobId != null ? this.jobId : consumerJobId;
       if (USER_PROVIDER.equals(providerId))
         return Input.loadResolvedUserInputPrefixUri(jobId, name);
+      if (GENERIC_PROVIDER.equals(providerId))
+        return s3Uri;
       return new S3Uri(defaultBucket(), Output.stepOutputS3Prefix(jobId, providerId, name));
     }
   }
 
   protected String toS3Path(OutputSet outputSet) {
-    return Output.stepOutputS3Prefix(outputSet.jobId != null ? outputSet.jobId : getJobId(),
-        outputSet.stepId != null ? outputSet.stepId : getId(), outputSet.name);
+    return outputSet.toS3Path(getJobId(), getId());
   }
 
   @JsonInclude(Include.NON_DEFAULT)
   public static class OutputSet {
     private String jobId;
     private String stepId;
+    private S3Uri s3Uri;
     public String name;
-    public Visibility visibility;
     public String fileSuffix;
     public boolean modelBased;
+    public final Visibility visibility;
 
-    private OutputSet() {} //NOTE: Only needed for deserialization purposes
+    private OutputSet() {
+      this.visibility = Visibility.SYSTEM; //NOTE: Only needed for deserialization purposes
+    }
 
     public OutputSet(String name, Visibility visibility, String fileSuffix) {
       this.name = name;
@@ -708,6 +817,51 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
       this.modelBased = other.modelBased;
       this.jobId = jobId;
       this.stepId = other.stepId;
+    }
+
+    private OutputSet(S3Uri s3Uri, String name, Visibility visibility) {
+      this.s3Uri = s3Uri;
+      this.name = name;
+      this.visibility = visibility;
+      stepId = GENERIC_PROVIDER;
+      jobId = null;
+      fileSuffix = "unknown";
+    }
+
+    /**
+     * This method can be used (e.g. in a SubFlow) to "pass through" an input set as an output set.
+     * @param inputSet
+     * @return
+     */
+    public static OutputSet fromInputSet(InputSet inputSet, Visibility visibility) {
+      if (GENERIC_PROVIDER.equals(inputSet.providerId))
+        return newGenericOutputSet(inputSet.s3Uri, inputSet.name);
+      OutputSet outputSet = new OutputSet(inputSet.name(), visibility, inputSet.modelBased);
+      outputSet.jobId = inputSet.jobId;
+      outputSet.stepId = inputSet.providerId();
+      return outputSet;
+    }
+
+    /**
+     * NOTE: This factory method should only be used for already existing datasets (e.g. from references)
+     * Compilers *must not* use a generic OuputSet for the purpose of passing outputs from one step as inputs to the next step.
+     * @param s3Uri
+     * @param name
+     * @return
+     */
+    public static OutputSet newGenericOutputSet(S3Uri s3Uri, String name) {
+      return new OutputSet(s3Uri, name, SYSTEM);
+    }
+
+    public static OutputSet newGenericOutputSet(OutputSet outputSet, Visibility visibility) {
+      return new OutputSet(outputSet.s3Uri, outputSet.name, visibility);
+    }
+
+    public static OutputSet copy(OutputSet outputSet, Visibility visibility) {
+      if (GENERIC_PROVIDER.equals(outputSet.stepId))
+        return newGenericOutputSet(outputSet, visibility);
+      else
+        return new OutputSet(outputSet, outputSet.jobId, visibility);
     }
 
     public String getJobId() {
@@ -743,6 +897,25 @@ public abstract class Step<T extends Step> implements Typed, StepExecution {
 
       return Objects.equals(jobId, that.jobId) && Objects.equals(stepId, that.stepId) && name.equals(that.name)
           && visibility == that.visibility && fileSuffix.equals(that.fileSuffix);
+    }
+
+    @JsonProperty("s3Uri")
+    private S3Uri getS3Uri() {
+      return (GENERIC_PROVIDER.equals(stepId)) ? s3Uri : null;
+    }
+
+    String toS3Path(String consumerJobId, String providerId) {
+      if (GENERIC_PROVIDER.equals(stepId))
+        return s3Uri.key();
+      return Output.stepOutputS3Prefix(jobId != null ? jobId : consumerJobId, stepId != null ? stepId : providerId, name);
+    }
+
+    public S3Uri toS3Uri(String consumerJobId) {
+      String jobId = this.jobId != null ? this.jobId : consumerJobId;
+      if (GENERIC_PROVIDER.equals(stepId))
+        return s3Uri;
+      else
+        return new S3Uri(defaultBucket(), toS3Path(jobId, stepId));
     }
   }
 

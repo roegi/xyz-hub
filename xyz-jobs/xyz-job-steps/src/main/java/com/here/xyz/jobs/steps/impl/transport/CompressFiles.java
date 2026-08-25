@@ -44,7 +44,7 @@ import java.util.zip.ZipOutputStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-public class CompressFiles extends SyncLambdaStep {
+public class CompressFiles extends SyncLambdaStep<CompressFiles> {
 
   public static final String COMPRESSED_DATA = "compressed-data";
   private static final int DEFAULT_BUFFER_SIZE = 8192;
@@ -52,6 +52,8 @@ public class CompressFiles extends SyncLambdaStep {
   private static final String ARCHIVE_FILE_SUFFIX = ".zip";
   private static final Logger logger = LogManager.getLogger();
   private final Set<String> createdFolders = new HashSet<>();
+  // this value is overridden in the tests
+  private int MIN_DESIRED_CONTAINED_FILESIZE = 1024 * 1024;
 
   /**
    * If this field is provided and the input has the corresponding metadata key-value, we will create a folder by that key-value and place
@@ -82,8 +84,13 @@ public class CompressFiles extends SyncLambdaStep {
   @JsonView({Internal.class, Static.class})
   private int unwrapFolderLevel = -1;
 
-  {
+  private CompressFiles() {
     setOutputSets(List.of(new OutputSet(COMPRESSED_DATA, Visibility.SYSTEM, ARCHIVE_FILE_SUFFIX)));
+  }
+
+  public CompressFiles(String outputSetGroup) {
+    this();
+    setOutputSetGroup(outputSetGroup);
   }
 
   @Override
@@ -225,6 +232,9 @@ public class CompressFiles extends SyncLambdaStep {
           }
           partStream.write(lineBytes);
           bytesWritten += lineBytes.length;
+          // add line break after each line
+          partStream.write("\n".getBytes());
+          bytesWritten += lineBytes.length + 1; // +1 for the newline character
         }
         if (partStream.size() > 0) {
           addZipEntry(zipStream, partStream.toByteArray(), processedFolderName);
@@ -432,7 +442,7 @@ public class CompressFiles extends SyncLambdaStep {
   @Override
   public boolean validate() throws BaseHttpServerVerticle.ValidationException {
     if (desiredContainedFilesize != -1) {
-      if (desiredContainedFilesize < 1024 * 1024 || desiredContainedFilesize > 5L * 1024 * 1024 * 1024) {
+      if (desiredContainedFilesize < MIN_DESIRED_CONTAINED_FILESIZE || desiredContainedFilesize > 5L * 1024 * 1024 * 1024) {
         throw new IllegalArgumentException("desiredContainedFilesize must be between 1MB and 5GB or -1");
       }
     }

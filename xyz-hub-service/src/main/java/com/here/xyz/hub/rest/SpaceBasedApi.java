@@ -20,9 +20,16 @@
 package com.here.xyz.hub.rest;
 
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.CONFLICT;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 
+import static com.here.xyz.hub.rest.ApiParam.Query.END_VERSION;
+import static com.here.xyz.hub.rest.ApiParam.Query.START_VERSION;
+import static com.here.xyz.models.hub.Ref.HEAD;
+
 import com.here.xyz.events.ContextAwareEvent.SpaceContext;
+import com.here.xyz.hub.config.BranchConfigClient;
+import com.here.xyz.hub.config.TagConfigClient;
 import com.here.xyz.hub.connectors.models.Space.InvalidExtensionException;
 import com.here.xyz.hub.rest.ApiParam.Path;
 import com.here.xyz.hub.rest.ApiParam.Query;
@@ -33,8 +40,10 @@ import com.here.xyz.models.hub.Ref.InvalidRef;
 import com.here.xyz.responses.ErrorResponse;
 import com.here.xyz.util.service.HttpException;
 import com.here.xyz.util.service.errors.DetailedHttpException;
+import io.vertx.core.Future;
 import io.vertx.ext.web.RoutingContext;
 import java.util.Map;
+import org.apache.logging.log4j.Marker;
 
 public abstract class SpaceBasedApi extends Api {
   /**
@@ -89,16 +98,71 @@ public abstract class SpaceBasedApi extends Api {
     return context.pathParam(Path.SPACE_ID);
   }
 
-  protected Ref getRef(RoutingContext context) throws HttpException {
+  protected Ref getRef(RoutingContext context, boolean changesetApi) throws HttpException {
     final String version = Query.getString(context, Query.VERSION, null);
     final String versionRef = Query.getString(context, Query.VERSION_REF, version);
 
     try {
-      return new Ref(versionRef);
+      if( !changesetApi )
+       return new Ref(versionRef);
+
+      // changesetApi
+      if( versionRef != null ) // versionRef or version  specified
+      {
+        Ref ref = new Ref(versionRef);
+        return ref.isRange() ? ref : new Ref( new Ref(0), ref); //TODO: minVersion hardcoded as 0 or align with space minversion?
+      }
+
+      // deprecated startVersion/endVersion
+      long startVersion = getLongQueryParam(context, START_VERSION, 0);
+      long endVersion = getLongQueryParam(context, END_VERSION, -1);
+
+      if (endVersion != -1 && startVersion > endVersion)
+       throw new IllegalArgumentException("The parameter \"" + START_VERSION + "\" needs to be smaller than or equal to \"" + END_VERSION + "\".");
+
+      Ref ref = new Ref( new Ref(Math.max(0, startVersion - 1)) , endVersion == -1 ? new Ref(HEAD) : new Ref(endVersion) ); //TODO: minVersion hardcoded as 0 or align with space minversion?
+
+      return ref;
+
     }
     catch (InvalidRef e) {
       Map<String, String> placeholders = Map.of("versionRef", versionRef, "cause", e.getMessage());
       throw new DetailedHttpException("E318404", placeholders, e);
     }
   }
+
+  protected Ref getRef(RoutingContext context) throws HttpException {
+    return getRef( context, false);
+  }
+
+  private long getLongQueryParam(RoutingContext context, String paramName, long defaultValue) {
+    try {
+      long paramValue = Query.getLong(context, paramName);
+      if (paramValue < 0)
+        throw new IllegalArgumentException("The parameter \"" + paramName + "\" must be >= 0.");
+      return paramValue;
+    }
+    catch (NullPointerException e) {
+      return defaultValue;
+    }
+    catch (NumberFormatException e) {
+      throw new IllegalArgumentException("The parameter \"" + paramName + "\" is not a number.", e);
+    }
+  }
+
+  /**
+   * Checks if an alias (tag or branch) with given id exists
+   * Returns failed Future if an alias is found
+   */
+  protected static Future<Void> checkExistingAlias(Marker marker, String spaceId, String alias) {
+    return Future.all(TagConfigClient.getInstance().getTag(marker, alias, spaceId),
+            BranchConfigClient.getInstance().load(spaceId, alias))
+            .compose(res -> {
+              if (res.resultAt(0) != null || res.resultAt(1) != null)
+                return Future.failedFuture(new HttpException(CONFLICT,
+                        (res.resultAt(0) != null ? "Tag" : "Branch") + " with ID " + alias + " for " + spaceId + " already exists"));
+              return Future.succeededFuture();
+            });
+  }
+
 }

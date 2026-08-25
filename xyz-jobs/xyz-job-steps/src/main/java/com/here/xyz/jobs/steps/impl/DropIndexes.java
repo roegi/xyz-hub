@@ -19,13 +19,19 @@
 
 package com.here.xyz.jobs.steps.impl;
 
-import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.buildLoadSpaceTableIndicesQuery;
-import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.buildSpaceTableDropIndexQueries;
+import static com.here.xyz.util.db.pg.IndexHelper.buildLoadSpaceTableIndicesQuery;
+import static com.here.xyz.util.db.pg.IndexHelper.buildSpaceTableDropIndexQueries;
 
+import com.fasterxml.jackson.annotation.JsonView;
+import com.here.xyz.jobs.steps.execution.StepException;
 import com.here.xyz.jobs.steps.resources.Load;
 import com.here.xyz.jobs.steps.resources.TooManyResourcesClaimed;
 import com.here.xyz.util.db.SQLQuery;
+import com.here.xyz.util.db.pg.IndexHelper.Index;
+import com.here.xyz.util.db.pg.IndexHelper.OnDemandIndex;
+import com.here.xyz.util.db.pg.IndexHelper.SystemIndex;
 import com.here.xyz.util.web.XyzWebClient.WebClientException;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +43,39 @@ import org.apache.logging.log4j.Logger;
 public class DropIndexes extends SpaceBasedStep<DropIndexes> {
   private static final Logger logger = LogManager.getLogger();
 
+  @JsonView({Internal.class, Static.class})
+  private boolean noIndicesFound = false;
+
+  private boolean spaceDeactivation = true;
+  //If not set, the step will drop all indexes of the space.
+  private List<Index> indexWhiteList;
+
+  public List<Index> getIndexWhiteList() {
+    return indexWhiteList;
+  }
+
+  public void setIndexWhiteList(List<Index> indexWhiteList) {
+    this.indexWhiteList = indexWhiteList;
+  }
+
+  public DropIndexes withIndexWhiteList(List<Index> indexWhiteList) {
+    setIndexWhiteList(indexWhiteList);
+    return this;
+  }
+
+  public boolean isSpaceDeactivation() {
+    return spaceDeactivation;
+  }
+
+  public void setSpaceDeactivation(boolean spaceDeactivation) {
+    this.spaceDeactivation = spaceDeactivation;
+  }
+
+  public DropIndexes withSpaceDeactivation(boolean spaceDeactivation) {
+    setSpaceDeactivation(spaceDeactivation);
+    return this;
+  }
+
   @Override
   public List<Load> getNeededResources() {
     try {
@@ -47,6 +86,10 @@ public class DropIndexes extends SpaceBasedStep<DropIndexes> {
       //TODO: is the step failed? Retry later? It could be a retryable error as the prior validation succeeded, depending on the type of HubWebClientException
       throw new RuntimeException(e);
     }
+  }
+
+  private int calculateNeededAcus() {
+    return 0;
   }
 
   @Override
@@ -64,32 +107,83 @@ public class DropIndexes extends SpaceBasedStep<DropIndexes> {
     return "Drops all the indexes on space " + getSpaceId();
   }
 
-  private int calculateNeededAcus() {
-    return 0;
+  @Override
+  public AsyncExecutionState getExecutionState() throws UnknownStateException {
+    if (noIndicesFound)
+      return AsyncExecutionState.SUCCEEDED;
+    return super.getExecutionState();
   }
 
   @Override
   public void execute(boolean resume) throws SQLException, TooManyResourcesClaimed, WebClientException {
-    logger.info("Gathering indices of space " + getSpaceId());
-    List<String> indexes = runReadQuerySync(buildLoadSpaceTableIndicesQuery(getSchema(db()), getRootTableName(space())), db(), calculateNeededAcus(),
-            rs -> {
-              List<String> result = new ArrayList<>();
-              while(rs.next())
-                result.add(rs.getString(1));
-              return result;
-            });
+    try {
+      logger.info("Gathering indices of space " + getSpaceId());
+      String tableName = getTableName(space(), getVersionRef());
 
-    if (indexes.isEmpty()) {
-      reportAsyncSuccess();
-      logger.info("No indices to found. None will be dropped for space " + getSpaceId());
+      //Get the list of existing indexes from database.
+      List<Index> indexes = runReadQuerySync(
+          buildLoadSpaceTableIndicesQuery(getSchema(db()), tableName), db(), calculateNeededAcus(),
+          DropIndexes::getIndicesFromResultSet);
+
+      if (indexes.isEmpty())
+        noIndicesPresent();
+      else {
+        /* Shift to */
+        if (spaceDeactivation) {
+          logger.info("[{}] Deactivating the space {} ...", getGlobalStepId(), getSpaceId());
+          hubWebClient().patchSpace(getSpaceId(), Map.of("active", false));
+        }
+
+        //List of all index names excluding whitelisted indexes
+        //This will drop all the indexes (system and on-demand) except for the white-listed ones
+        List<String> idxNames = indexes.stream()
+            .filter(index -> index != null && (indexWhiteList == null || indexWhiteList.stream()
+                .noneMatch(excludedIndex -> isSameIndex(index, excludedIndex))))
+            .map(index -> index instanceof SystemIndex ? index.getIndexName(tableName) : index.getIndexName())
+            .toList();
+        if (idxNames.isEmpty()) {
+          noIndicesPresent();
+          return;
+        }
+
+        List<SQLQuery> dropQueries = buildSpaceTableDropIndexQueries(getSchema(db()), idxNames);
+        SQLQuery dropIndexesQuery = SQLQuery.join(dropQueries, ";");
+        logger.info("[{}] Dropping the following indices for space {} : {} ", getGlobalStepId(), getSpaceId(), idxNames);
+        runWriteQueryAsync(dropIndexesQuery, db(), calculateNeededAcus());
+      }
     }
-    else {
-      logger.info("[{}] Deactivating the space {} ...", getGlobalStepId(), getSpaceId());
-      hubWebClient().patchSpace(getSpaceId(), Map.of("active", false));
-      logger.info("Dropping the following indices for space " + getSpaceId() + ": " + indexes);
-      List<SQLQuery> dropQueries = buildSpaceTableDropIndexQueries(getSchema(db()), indexes);
-      SQLQuery dropIndexesQuery = SQLQuery.join(dropQueries, ";");
-      runWriteQueryAsync(dropIndexesQuery, db(), calculateNeededAcus());
+    catch (Exception e) {
+      throw new StepException("Error while dropping indices for space " + getSpaceId(), e).withRetryable(true);
     }
+  }
+
+  public static List<Index> getIndicesFromResultSet(ResultSet rs) throws SQLException {
+    List<Index> result = new ArrayList<>();
+    while (rs.next()) {
+      String idxName = rs.getString("idx_name");
+      String idxPropertyPath = rs.getString("idx_property");
+      Character src = rs.getString("src").charAt(0);
+
+      if (src == 's')
+        result.add(SystemIndex.fromString(idxPropertyPath));
+      else if (src == 'm' || src == 'a')
+        result.add(new OnDemandIndex().withIndexName(idxName).withPropertyPath(idxPropertyPath));
+      else
+        throw new StepException("Unknown index source '" + src + "' for index '" + idxName);
+    }
+    return result;
+  }
+
+  private void noIndicesPresent() {
+    logger.info("[{}] No Indices got found for space {}", getGlobalStepId(), getSpaceId());
+    noIndicesFound = true;
+  }
+
+  private boolean isSameIndex(Index index1, Index index2) {
+    if (index1 instanceof SystemIndex systemIndex1 && index2 instanceof SystemIndex systemIndex2)
+      return systemIndex1 == systemIndex2;
+    if (index1 instanceof OnDemandIndex onDemandIndex1 && index2 instanceof OnDemandIndex onDemandIndex2)
+      return onDemandIndex1.getPropertyPath().equals(onDemandIndex2.getPropertyPath());
+    return false;
   }
 }

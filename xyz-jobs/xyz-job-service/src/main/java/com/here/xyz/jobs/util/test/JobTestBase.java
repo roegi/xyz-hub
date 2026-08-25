@@ -33,6 +33,7 @@ import org.apache.logging.log4j.Logger;
 public class JobTestBase extends StepTestBase {
     private static final Logger logger = LogManager.getLogger();
     private static final String LOCALSTACK_HOST = System.getProperty("localstack.host", "localhost");
+    protected static int DEFAULT_JOB_POLL_TIMEOUT_SEC = 120;
     protected Set<String> createdJobs = new HashSet<>();
     protected Set<String> createdSpaces = new HashSet<>();
 
@@ -40,7 +41,7 @@ public class JobTestBase extends StepTestBase {
 
     /** Use {@link JobTestBase#createJob(JsonObject)} instead*/
     @Deprecated
-    public static String createJob(Job job) throws IOException, InterruptedException {
+    public String createJob(Job job) throws IOException, InterruptedException {
         logger.info("Creating job ...");
         HttpResponse<byte[]> jobResponse = post("/jobs", job);
 
@@ -49,11 +50,12 @@ public class JobTestBase extends StepTestBase {
         Job createdJob = XyzSerializable.deserialize(jobResponse.body(), Job.class);
 
         logger.info("Internal Job config:\n{}", toPrettyJson(get("/admin/jobs/" + createdJob.getId()).body()));
+        createdJobs.add(job.getId());
 
         return createdJob.getId();
     }
 
-    protected static String createJob(JsonObject job) throws IOException, InterruptedException {
+    protected String createJob(JsonObject job) throws IOException, InterruptedException {
         logger.info("Creating job ...");
         HttpResponse<byte[]> jobResponse = post("/jobs", job.mapTo(Map.class));
 
@@ -62,6 +64,7 @@ public class JobTestBase extends StepTestBase {
         String jobId = new JsonObject(new String(jobResponse.body())).getString("id");
 
         logger.info("Internal Job config:\n{}", toPrettyJson(get("/admin/jobs/" + jobId).body()));
+        createdJobs.add(jobId);
 
         return jobId;
     }
@@ -73,9 +76,16 @@ public class JobTestBase extends StepTestBase {
     }
 
     protected String createJobAndPollStatus(JsonObject job, byte[] fileContent) throws Exception {
+        return createJobAndPollStatus(job, fileContent, DEFAULT_JOB_POLL_TIMEOUT_SEC);
+    }
+
+    protected String createJobAndPollStatus(JsonObject job, int timeoutSeconds) throws Exception {
+      return createJobAndPollStatus(job, null, timeoutSeconds);
+    }
+
+    protected String createJobAndPollStatus(JsonObject job, byte[] fileContent, int timeoutSeconds) throws Exception {
         //Create Job
         String jobId = createJob(job);
-        createdJobs.add(jobId);
 
         //Upload content if provided
         if(fileContent != null) {
@@ -85,7 +95,7 @@ public class JobTestBase extends StepTestBase {
         }
 
         //Wait till Job reached final state
-        pollJobStatus(jobId);
+        pollJobStatus(jobId, timeoutSeconds);
 
         return jobId;
     }
@@ -116,6 +126,13 @@ public class JobTestBase extends StepTestBase {
         uploadInputFile(fileContent, getLocalizedUrl(uploadUrl));
     }
 
+    public static void addS3InputToJob(String jobId, String bucket, String prefix) throws IOException, InterruptedException {
+        post("/jobs/" + jobId + "/inputs", Map.of(
+                "type", "InputsFromS3",
+                "bucket", bucket,
+                "prefix", prefix));
+    }
+
     public static void uploadFilesToJob(String jobId, List<byte[]> fileContents) throws IOException, InterruptedException {
         //Generate N Files with M features
         for(byte[] fileContent :fileContents) {
@@ -124,34 +141,44 @@ public class JobTestBase extends StepTestBase {
     }
 
     public static void startJob(String jobId) throws IOException, InterruptedException {
-        logger.info("Starting job ...");
+        logger.info("Starting job {] ...", jobId);
         patch("/jobs/" + jobId + "/status", Map.of("desiredAction", "START"));
     }
 
     public static void deleteJob(String jobId) throws IOException, InterruptedException {
-        logger.info("Deleting job ...");
+        logger.info("Deleting job {} ...", jobId);
         delete("/jobs/" + jobId );
     }
 
     public static Map getJob(String jobId, boolean useAdminEndpoint) throws IOException, InterruptedException {
-        logger.info("Get job ...");
+        logger.info("Get job {} ...", jobId);
         HttpResponse<byte[]> jobResponse = get((useAdminEndpoint ? "/admin" : "/") +"/jobs/" + jobId);
         return XyzSerializable.deserialize(jobResponse.body(), new TypeReference<Map>() {});
     }
 
+    public static List<Map> getJobsOnResource(String resource, boolean useAdminEndpoint) throws IOException, InterruptedException {
+        logger.info("Get jobs on resource {} ...", resource);
+        HttpResponse<byte[]> jobsResponse = get((useAdminEndpoint ? "/admin" : "/") +"/jobs?resource=" + resource );
+        return XyzSerializable.deserialize(jobsResponse.body(), new TypeReference<List<Map>>() {});
+    }
+
     public static RuntimeStatus getJobStatus(String jobId) throws IOException, InterruptedException {
-        logger.info("Get job status...");
+        logger.info("Get job status of {} ...", jobId);
         HttpResponse<byte[]> statusResponse = get("/jobs/" + jobId + "/status");
         return XyzSerializable.deserialize(statusResponse.body(), RuntimeStatus.class);
     }
 
     public static List<Map> getJobOutputs(String jobId) throws IOException, InterruptedException {
         logger.info("Get job Outputs ...");
-        HttpResponse<byte[]> outputResponse = get("/jobs/" + jobId + "/outputs");
+        HttpResponse<byte[]> outputResponse = get("/admin/jobs/" + jobId + "/outputs");
         return XyzSerializable.deserialize(outputResponse.body(), new TypeReference<List<Map>>() {});
     }
 
-    public static void pollJobStatus(String jobId) throws InterruptedException {
+  public static void pollJobStatus(String jobId) throws InterruptedException {
+      pollJobStatus(jobId, DEFAULT_JOB_POLL_TIMEOUT_SEC);
+  }
+
+    public static void pollJobStatus(String jobId, int timeoutSeconds) throws InterruptedException {
         ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
 
         //Poll job status every 5 seconds
@@ -172,7 +199,6 @@ public class JobTestBase extends StepTestBase {
             }
         }, 0, 5, TimeUnit.SECONDS);
 
-        int timeoutSeconds = 120;
         if (!executor.awaitTermination(timeoutSeconds, TimeUnit.SECONDS)) {
             executor.shutdownNow();
             logger.info("Stopped polling status for job {} after timeout {} seconds", jobId, timeoutSeconds);
@@ -245,7 +271,6 @@ public class JobTestBase extends StepTestBase {
     protected void createSelfRunningJob(Job job) throws Exception {
         //Create Job - expect autostart
         createJob(job);
-        createdJobs.add(job.getId());
 
         //Wait till Job reached final state
         pollJobStatus(job.getId());
@@ -256,7 +281,6 @@ public class JobTestBase extends StepTestBase {
     protected void createAndStartJob(Job job, byte[] fileContent) throws Exception {
         //Create Job
         createJob(job);
-        createdJobs.add(job.getId());
 
         //Upload content if provided
         if(fileContent != null)

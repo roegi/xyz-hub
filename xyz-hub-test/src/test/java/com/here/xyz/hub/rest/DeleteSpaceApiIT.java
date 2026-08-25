@@ -20,6 +20,7 @@
 package com.here.xyz.hub.rest;
 
 import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
+import static io.netty.handler.codec.http.HttpResponseStatus.CREATED;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static io.netty.handler.codec.http.HttpResponseStatus.NO_CONTENT;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
@@ -28,24 +29,20 @@ import static org.hamcrest.Matchers.equalTo;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class DeleteSpaceApiIT extends TestSpaceWithFeature {
 
-  @BeforeClass
-  public static void setupClass() {
-    remove();
-  }
+  private static String spaceName;
 
   @Before
   public void setup() {
-    createSpace();
+    spaceName = createSpaceWithRandomId();
   }
 
   @After
   public void tearDown() {
-    remove();
+    remove(spaceName);
   }
 
   @Test
@@ -53,7 +50,7 @@ public class DeleteSpaceApiIT extends TestSpaceWithFeature {
     given()
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
         .when()
-        .delete("/spaces/x-psql-test")
+        .delete("/spaces/" + spaceName)
         .then()
         .statusCode(NO_CONTENT.code());
   }
@@ -64,20 +61,20 @@ public class DeleteSpaceApiIT extends TestSpaceWithFeature {
         .accept(APPLICATION_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
         .when()
-        .delete("/spaces/x-psql-test")
+        .delete("/spaces/" + spaceName)
         .then()
         .statusCode(OK.code())
-        .body("id", equalTo("x-psql-test"));
+        .body("id", equalTo(spaceName));
   }
 
   @Test
   public void deleteSpaceNonExisting() {
-    remove();
+    remove(spaceName);
     given()
         .accept(APPLICATION_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
         .when()
-        .delete("/spaces/x-psql-test")
+        .delete("/spaces/" + spaceName)
         .then()
         .statusCode(NOT_FOUND.code());
   }
@@ -87,9 +84,82 @@ public class DeleteSpaceApiIT extends TestSpaceWithFeature {
    */
   @Test
   public void createSpaceWithSameName() {
-    addFeatures();
-    remove();
-    createSpace();
-    countFeatures(0);
+    addFeatures( spaceName );
+    remove( spaceName );
+    createSpaceWithId(spaceName);
+    countFeatures(spaceName,0);
   }
+
+  @Test
+  public void truncateSpace() {  //TODO: move to /features test
+    addFeatures( spaceName );
+
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
+        .when()
+        .delete("/spaces/" + spaceName + "/features?eraseContent=true")
+        .then()
+        .statusCode(NO_CONTENT.code());
+
+    countFeatures(spaceName,0);
+
+  }
+
+  @Test
+  public void deletingSpaceWithReference_shouldExpireReference() {
+    String referenceId = createReferenceForEntity(spaceName);
+
+    try {
+      given()
+          .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+          .when()
+          .delete("/spaces/" + spaceName)
+          .then()
+          .statusCode(NO_CONTENT.code());
+
+      given()
+          .accept(APPLICATION_JSON)
+          .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+          .when()
+          .get("/references/" + referenceId)
+          .then()
+          .statusCode(NOT_FOUND.code());
+    } finally {
+      deleteReference(referenceId);
+    }
+  }
+
+  private static String createReferenceForEntity(String entityId) {
+    String payload = """
+      {
+        "entityId": "%s",
+        "isPatch": false,
+        "endVersion": 1,
+        "objectType": "features",
+        "contentType": "application/geo+json-seq",
+        "location": "s3://bucket/space-delete-it",
+        "sourceSystem": "IML",
+        "targetSystem": "S3"
+      }
+      """.formatted(entityId);
+
+    return given()
+        .accept(APPLICATION_JSON)
+        .contentType(APPLICATION_JSON)
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .body(payload)
+        .post("/references")
+        .then()
+        .statusCode(CREATED.code())
+        .extract()
+        .path("id");
+  }
+
+  private static void deleteReference(String referenceId) {
+    given()
+        .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
+        .when()
+        .delete("/references/" + referenceId);
+  }
+
 }

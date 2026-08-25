@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ package com.here.xyz.test.featurewriter.sql;
 
 import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.SCHEMA;
 import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.TABLE;
-import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.buildCreateSpaceTableQueries;
+import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.buildCreateSpaceTableQueriesForTests;
 
 import com.here.xyz.XyzSerializable;
 import com.here.xyz.events.ContextAwareEvent.SpaceContext;
@@ -33,23 +33,31 @@ import com.here.xyz.events.UpdateStrategy.OnVersionConflict;
 import com.here.xyz.events.WriteFeaturesEvent;
 import com.here.xyz.models.geojson.implementation.Feature;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
-import com.here.xyz.test.SQLITBase;
 import com.here.xyz.test.featurewriter.SpaceWriter;
+import com.here.xyz.test.sql.base.SQLITBase;
 import com.here.xyz.util.db.SQLQuery;
 import com.here.xyz.util.db.datasource.DataSourceProvider;
+import com.here.xyz.util.db.pg.FeatureWriterQueryBuilder.FeatureWriterQueryContextBuilder;
 import com.here.xyz.util.db.pg.SQLError;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 public class SQLSpaceWriter extends SpaceWriter {
-
+  private static final Logger logger = LogManager.getLogger();
   protected static String VERSION_SEQUENCE_SUFFIX = "_version_seq";
+  private boolean batchMode;
 
   public SQLSpaceWriter(boolean composite, String testSuiteName) {
     super(composite, testSuiteName);
+  }
+
+  public SQLSpaceWriter withBatchMode(boolean batchMode) {
+    this.batchMode = batchMode;
+    return this;
   }
 
   @Override
@@ -57,8 +65,8 @@ public class SQLSpaceWriter extends SpaceWriter {
     try (DataSourceProvider dsp = SQLITBase.getDataSourceProvider()) {
       List<SQLQuery> queries = new ArrayList<>();
       if (composite)
-        queries.addAll(buildCreateSpaceTableQueries(dsp.getDatabaseSettings().getSchema(), superSpaceId()));
-      queries.addAll(buildCreateSpaceTableQueries(dsp.getDatabaseSettings().getSchema(), spaceId()));
+        queries.addAll(buildCreateSpaceTableQueriesForTests(dsp.getDatabaseSettings().getSchema(), superSpaceId()));
+      queries.addAll(buildCreateSpaceTableQueriesForTests(dsp.getDatabaseSettings().getSchema(), spaceId()));
       SQLQuery.batchOf(queries).writeBatch(dsp);
     }
   }
@@ -94,24 +102,26 @@ public class SQLSpaceWriter extends SpaceWriter {
       OnVersionConflict onVersionConflict, OnMergeConflict onMergeConflict, boolean isPartial, SpaceContext spaceContext,
       boolean historyEnabled) throws Exception {
     try (DataSourceProvider dsp = SQLITBase.getDataSourceProvider()) {
+      long tStart = System.currentTimeMillis();
       SQLQuery q = generateWriteFeatureQuery(featureList, author, onExists, onNotExists, onVersionConflict, onMergeConflict,
           isPartial, spaceContext, historyEnabled);
 
-      return SQLQuery.batchOf(q).writeBatch(dsp);
+      int[] result = SQLQuery.batchOf(q).writeBatch(dsp);
+      System.out.println("SQLQuery " + q.getQueryId() + " took: " + (System.currentTimeMillis() - tStart) + "ms.");
+      return result;
     }
   }
 
   private SQLQuery generateWriteFeatureQuery(List<Feature> featureList, String author, OnExists onExists, OnNotExists onNotExists,
       OnVersionConflict onVersionConflict, OnMergeConflict onMergeConflict, boolean isPartial, SpaceContext spaceContext,
       boolean historyEnabled) {
-    final Map<String, Object> queryContext = new HashMap<>(Map.of(
-        "schema", getDataSourceProvider().getDatabaseSettings().getSchema(),
-        "table", spaceId(),
-        "context", spaceContext,
-        "historyEnabled", historyEnabled
-    ));
-    if (composite)
-      queryContext.put("extendedTable", superSpaceId());
+    final Map<String, Object> queryContext = new FeatureWriterQueryContextBuilder()
+        .withSchema(getDataSourceProvider().getDatabaseSettings().getSchema())
+        .withTables(composite ? List.of(superSpaceId(), spaceId()): List.of(spaceId()))
+        .withSpaceContext(spaceContext)
+        .withHistoryEnabled(historyEnabled)
+        .withBatchMode(batchMode)
+        .build();
 
     WriteFeaturesEvent.Modification modification = new
             WriteFeaturesEvent.Modification()

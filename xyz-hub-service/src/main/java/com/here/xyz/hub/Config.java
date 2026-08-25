@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,18 +19,20 @@
 
 package com.here.xyz.hub;
 
-import static com.here.xyz.hub.task.SpaceTask.ConnectorMapping.RANDOM;
-
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.here.xyz.hub.auth.AuthorizationType;
 import com.here.xyz.hub.task.SpaceTask.ConnectorMapping;
 import com.here.xyz.util.ARN;
+import com.here.xyz.util.Hasher;
 import com.here.xyz.util.service.BaseConfig;
+
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import static com.here.xyz.hub.task.SpaceTask.ConnectorMapping.RANDOM;
 
 /**
  * The service configuration.
@@ -115,11 +117,26 @@ public class Config extends BaseConfig {
   }
 
   public String getDefaultStorageId(String region) {
+    return getDefaultStorageId(region, null);
+  }
+
+  public String getDefaultStorageId(String region, String spaceId) {
     List<String> storageIds = getDefaultStorageIds(region);
     if (storageIds == null)
       storageIds = defaultStorageIds;
 
-    return storageIds == null ? null : storageIds.get((int) (Math.random() * storageIds.size()));
+    if (storageIds == null)
+      return null;
+
+    String randomStorageId = storageIds.get((int) (Math.random() * storageIds.size()));
+
+    try {
+      return spaceId == null ? randomStorageId
+          : storageIds.get((int) (Math.abs(Long.parseLong(Hasher.getHash(spaceId).substring(0, 8), 16)) % storageIds.size()));
+    }
+    catch (Exception e) {
+      return randomStorageId; //Handle exception, e.g., return a random storageId as fallback
+    }
   }
 
   /**
@@ -240,6 +257,21 @@ public class Config extends BaseConfig {
    * The ARN of the settings table in DynamoDB.
    */
   public String SETTINGS_DYNAMODB_TABLE_ARN;
+
+  /**
+   * The ARN of the branches table in DynamoDB.
+   */
+  public String BRANCHES_DYNAMODB_TABLE_ARN;
+
+  /**
+   * The ARN of the entities table in DynamoDB.
+   */
+  public String ENTITIES_DYNAMODB_TABLE_ARN;
+
+  /**
+   * The ARN of the Data References table in DynamoDB.
+   */
+  public String REFERENCES_DYNAMODB_TABLE_ARN;
 
   /**
    * The ARN of the admin message topic.
@@ -430,10 +462,6 @@ public class Config extends BaseConfig {
    * The PEM encoded certificate(-chain) to be used as truststore for client TLS authentication (mTLS) including header & footer.
    */
   public String XYZ_HUB_CLIENT_TLS_TRUSTSTORE;
-  /**
-   * S3/CW/Dynamodb localstack endpoints
-   */
-  public String LOCALSTACK_ENDPOINT;
 
   /**
    * A JSON String which holds the regional cluster mapping.

@@ -166,7 +166,7 @@ public class GetFeaturesByBBoxClustered<E extends GetFeaturesByBBoxEvent, R exte
             + "   (  "
             + "    select  "
             + "     'Feature'::text as type, "
-            + "     left(md5(#{fid}),15) as id, "
+            + "     left(md5(${{fid}}),15) as id, "
             + "     ( select row_to_json( prop ) "
             + "       from "
             + "       ( select 'H3'::text as kind, "
@@ -213,7 +213,7 @@ public class GetFeaturesByBBoxClustered<E extends GetFeaturesByBBoxEvent, R exte
         .withQueryFragment("statistics", statisticalPropertyProvided ? ", min, max, sum, avg, median" : "")
         .withNamedParameter("zLevel", zLevel)
         .withQueryFragment("geoResultFieldName", !h3cflip ? "centroid" : "hexagon")
-        .withNamedParameter("fid", fid)
+        .withQueryFragment("fid", fid)
         .withQueryFragment("geoFilter", expBboxSql)
         .withQueryFragment("filterEmptyGeo", event.getClip() ? DhString.format(" and not st_isempty( %s ) ", clippedGeo) : "")
         .withNamedParameter("limit", event.getLimit());
@@ -351,12 +351,14 @@ public class GetFeaturesByBBoxClustered<E extends GetFeaturesByBBoxEvent, R exte
 
         if (event.getPropertiesQuery() != null) {
           pureEstimation =
-              "  SELECT xyz_count_estimation(concat(" +
+              " select case when (est_cnt >= 6000000) and (inner_cond_est_cnt <= 1) then 0 else inner_cond_est_cnt end " +
+				      " from " +
+				      " ( SELECT xyz_count_estimation(concat(" +
                   "      'select 1 from ${schema}.${headTable}"+
                   "       WHERE ST_Intersects(geo, xyz_qk_qk2bbox(''',qk,''')) "+
                   " AND "+
                   substituteCompletely(generatePropertiesQuery(event)).replaceAll("'","''")+
-                  "'))";
+                  "')) as inner_cond_est_cnt ) ";
         }
         else
           pureEstimation = _pureEstimation;

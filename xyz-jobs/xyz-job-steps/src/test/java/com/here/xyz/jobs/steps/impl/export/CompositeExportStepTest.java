@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -110,10 +110,15 @@ public class CompositeExportStepTest extends ExportTestBase {
     }
 
     @Test
-    public void exportWithContextSuperAndWithPropertyFilter() throws Exception {
-        //new_point does not exist in base
+    public void exportEmptyFile() throws Exception {
         exportWithContextAndWithPropertyFilter(SpaceContext.SUPER,
-                URLEncoder.encode("f.id=\"new_point1\"", StandardCharsets.UTF_8));
+                URLEncoder.encode("f.id=\"Non_Existing_Feature\"", StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void exportWithContextSuperAndWithPropertyFilter() throws Exception {
+        exportWithContextAndWithPropertyFilter(SpaceContext.SUPER,
+                URLEncoder.encode("f.id=\"base_point1\"", StandardCharsets.UTF_8));
     }
 
     @Test

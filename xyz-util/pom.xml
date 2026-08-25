@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (C) 2017-2024 HERE Europe B.V.
-  ~
+  ~ Copyright (C) 2017-2026 HERE Europe B.V.
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
   ~ You may obtain a copy of the License at
@@ -25,7 +24,7 @@
     <groupId>com.here.xyz</groupId>
     <artifactId>xyz-hub</artifactId>
     <relativePath>../pom.xml</relativePath>
-    <version>3.17.12-SNAPSHOT</version>
+    <version>3.23.59-SNAPSHOT</version>
   </parent>
 
   <licenses>
@@ -137,6 +136,10 @@
       <artifactId>aws-lambda-java-core</artifactId>
       <groupId>com.amazonaws</groupId>
     </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>cloudwatch</artifactId>
+    </dependency>
 
     <!-- DB utils -->
     <dependency>
@@ -196,9 +199,22 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <groupId>org.junit-pioneer</groupId>
+      <artifactId>junit-pioneer</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <artifactId>hamcrest</artifactId>
       <groupId>org.hamcrest</groupId>
       <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>dnsjava</groupId>
+      <artifactId>dnsjava</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.jayway.jsonpath</groupId>
+      <artifactId>json-path</artifactId>
     </dependency>
   </dependencies>
 </project>

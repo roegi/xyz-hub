@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,8 +37,11 @@ import com.here.xyz.Payload;
 import com.here.xyz.events.GetChangesetStatisticsEvent;
 import com.here.xyz.events.ModifySpaceEvent;
 import com.here.xyz.events.ModifySpaceEvent.Operation;
+import com.here.xyz.hub.Config;
 import com.here.xyz.hub.Service;
 import com.here.xyz.hub.auth.Authorization;
+import com.here.xyz.hub.config.BranchConfigClient;
+import com.here.xyz.hub.config.DataReferenceConfigClient;
 import com.here.xyz.hub.config.SpaceConfigClient.SpaceSelectionCondition;
 import com.here.xyz.hub.config.settings.SpaceStorageMatchingMap;
 import com.here.xyz.hub.connectors.RpcClient;
@@ -64,8 +67,12 @@ import com.here.xyz.models.hub.jwt.ActionMatrix;
 import com.here.xyz.models.hub.jwt.AttributeMap;
 import com.here.xyz.models.hub.jwt.JWTPayload;
 import com.here.xyz.responses.ChangesetsStatisticsResponse;
+import com.here.xyz.util.Async;
+import com.here.xyz.util.service.BaseHttpServerVerticle;
 import com.here.xyz.util.service.Core;
 import com.here.xyz.util.service.HttpException;
+import com.here.xyz.util.service.errors.DetailedHttpException;
+import com.here.xyz.util.web.JobWebClient;
 import io.vertx.core.Future;
 import io.vertx.core.Promise;
 import io.vertx.core.json.Json;
@@ -90,27 +97,45 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.Marker;
 
 public class SpaceTaskHandler {
-
+  private static final Async ASYNC = new Async(10, SpaceTaskHandler.class);
   private static final Logger logger = LogManager.getLogger();
   private static final int CLIENT_VALUE_MAX_SIZE = 1024;
   private static final String DRY_RUN_SUPPORT_VERSION = "0.7.0";
 
   static <X extends ReadQuery<?>> void readSpaces(final X task, final Callback<X> callback) {
     Service.spaceConfigClient.getSelected(task.getMarker(),
-            task.authorizedCondition, task.selectedCondition, task.propertiesQuery)
-            .compose(spaces -> {
-              if (StringUtils.isBlank(task.selectedCondition.tagId) || spaces.isEmpty()) {
-                return Future.succeededFuture(spaces);
-              }
+                task.authorizedCondition, task.selectedCondition, task.propertiesQuery)
+        .compose(spaces -> {
+          if (StringUtils.isBlank(task.selectedCondition.tagId) || spaces.isEmpty()) {
+            return Future.succeededFuture(spaces);
+          }
 
-              List<String> spaceIds = spaces.stream().map(Space::getId).toList();
-              return Service.tagConfigClient.getTags(task.getMarker(), task.selectedCondition.tagId, spaceIds)
-                      .compose(tags -> {
-                        List<String> spaceIdsFromTag = tags.stream().map(Tag::getSpaceId).toList();
-                        List<Space> spacesFilteredByTag = spaces.stream().filter(space -> spaceIdsFromTag.contains(space.getId())).toList();
-                        return augmentWithTags(spacesFilteredByTag, tags);
-                      });
-            })
+          List<String> spaceIds = spaces.stream().map(Space::getId).toList();
+          return Service.tagConfigClient.getTags(task.getMarker(), task.selectedCondition.tagId, spaceIds)
+                  .compose(tags -> {
+                    List<String> spaceIdsFromTag = tags.stream().map(Tag::getSpaceId).toList();
+                    List<Space> spacesFilteredByTag = spaces.stream().filter(space -> spaceIdsFromTag.contains(space.getId())).toList();
+                    return augmentWithTags(spacesFilteredByTag, tags);
+                  });
+        })
+        .onFailure(t -> {
+          logger.error(task.getMarker(), "Unable to load space definitions.'", t);
+          callback.exception(new HttpException(INTERNAL_SERVER_ERROR, "Unable to load the resource definitions.", t));
+        })
+        .onSuccess(spaces -> {
+          task.responseSpaces = spaces;
+          callback.call(task);
+        });
+  }
+
+  static <X extends ReadQuery<?>> void readExtendingSpaces(final X task, final Callback<X> callback) {
+    if(task.selectedCondition.spaceIds == null){
+      callback.call(task);
+      return;
+    }
+    String spaceId = task.selectedCondition.spaceIds.stream().findFirst().orElse(null);
+
+    getAllExtendingSpaces(task.getMarker(), spaceId)
             .onFailure(t -> {
               logger.error(task.getMarker(), "Unable to load space definitions.'", t);
               callback.exception(new HttpException(INTERNAL_SERVER_ERROR, "Unable to load the resource definitions.", t));
@@ -119,6 +144,7 @@ public class SpaceTaskHandler {
               task.responseSpaces = spaces;
               callback.call(task);
             });
+
   }
 
   static <X extends ReadQuery<?>> void checkSpaceExists(final X task, final Callback<X> callback) {
@@ -217,7 +243,7 @@ public class SpaceTaskHandler {
       logger.info(task.getMarker(), "storageId from space template: " + storageId);
 
       if (region != null) {
-        storageId = Service.configuration.getDefaultStorageId(region);
+        storageId = Service.configuration.getDefaultStorageId(region, spaceId);
         logger.info(task.getMarker(), "default storageId from region " + region + ": " + storageId);
 
         if (task.modifyOp.connectorMapping == ConnectorMapping.SPACESTORAGEMATCHINGMAP) {
@@ -396,7 +422,8 @@ public class SpaceTaskHandler {
       return;
     }
 
-    if (entry.input != null && entry.result == null)
+    if (entry.input != null && entry.result == null) {
+      logger.warn("DEBUG: Deleting space: {}", entry.head.getId());
       Service.spaceConfigClient
           .delete(task.getMarker(), entry.head.getId())
           .onFailure(callback::exception)
@@ -404,7 +431,12 @@ public class SpaceTaskHandler {
             task.responseSpaces = Collections.singletonList(task.modifyOp.entries.get(0).head);
             callback.call(task);
           });
-    else
+    }
+    else {
+      if (areSearchablePropertiesChanged(task, entry))
+        createMaintenanceJob(task.getMarker(), entry.result.getId());
+
+      logger.warn("DEBUG: Storing space: {}", entry.result.getId());
       Service.spaceConfigClient
           .store(task.getMarker(), entry.result)
           .onFailure(callback::exception)
@@ -412,6 +444,49 @@ public class SpaceTaskHandler {
             task.responseSpaces = Collections.singletonList(entry.result);
             callback.call(task);
           });
+    }
+  }
+
+  private static boolean areSearchablePropertiesChanged(ConditionalOperation task, Entry<Space> entry) {
+    // Only take care about space updates where properties were modified
+    if(!task.isUpdate() || !entry.isModified){
+      return false;
+    }
+
+    Map<String, Boolean> headProperties = entry.head.getSearchableProperties();
+    Map<String, Boolean> resultProperties = entry.result.getSearchableProperties();
+
+    if(headProperties != null && !headProperties.equals(resultProperties)
+            || headProperties == null && resultProperties != null){
+      //skip check if the space has an extension
+      return entry.result.getExtension() == null;
+    }
+    return false;
+  }
+
+  static void createMaintenanceJob(Marker marker, String spaceId){
+    // If the searchable properties were modified, trigger the OnDemand Index Creation Job
+    logger.info(marker, "Trigger OnDemand Index Creation Job");
+
+    JsonObject maintenanceJob = new JsonObject("""
+            {
+                "description": "Maintain indices for the space $SPACE_ID",
+                "source": {
+                    "type": "Space",
+                    "id": "$SPACE_ID"
+                },
+                "process": {
+                    "type": "Maintain"
+                }
+            }
+            """.replaceAll("\\$SPACE_ID", spaceId));
+
+    ASYNC.run(() -> JobWebClient.getInstance(Config.instance.JOB_API_ENDPOINT).createJob(maintenanceJob))
+            .onFailure(e -> {
+              logger.error(marker, "Creation of maintenance Job", e);
+            }).onSuccess(job -> {
+              logger.info(marker, "Creation of maintenance Job succeeded: {}", job);
+            });
   }
 
   private static Space getSpaceTemplate(String owner, String cid) {
@@ -484,6 +559,25 @@ public class SpaceTaskHandler {
         });
   }
 
+  static void performSubResourceUpdates(ConditionalOperation task, Callback<ConditionalOperation> callback) {
+    if (!task.isDelete()) {
+      callback.call(task);
+      return;
+    }
+
+    Space space = task.modifyOp.entries.get(0).head;
+    BranchConfigClient.getInstance().load(space.getId())
+        .compose(branches -> Future.all(branches.stream()
+            .map(branch -> BranchHandler.deleteBranch(task.getMarker(), space.getId(), branch.getId()))
+            .toList())
+            .onComplete(ar -> {
+              if (ar.failed())
+                callback.exception(ar.cause());
+              else
+                callback.call(task);
+        }));
+  }
+
   static void resolveExtensions(ConditionalOperation task, Callback<ConditionalOperation> callback) {
     if (!task.isCreate() && !task.isUpdate()) {
       callback.call(task);
@@ -521,15 +615,20 @@ public class SpaceTaskHandler {
 
         ConnectorRef extendedConnector = extendedSpace.getStorage();
         if (task.isCreate()) {
+          //Store searchableProperties from base (but without storing them later)
+          task.resolvedSearchableProperties = extendedSpace.getSearchableProperties();
           //Override the storage config by copying it from the extended space
           space.setStorage(new ConnectorRef()
-              .withId(extendedConnector.getId())
-              .withParams(extendedConnector.getParams() != null ? extendedConnector.getParams() : new HashMap<>()));
+                  .withId(extendedConnector.getId())
+                  .withParams(extendedConnector.getParams() != null ? extendedConnector.getParams() : new HashMap<>()));
         }
         else if (!Objects.equals(space.getStorage().getId(), extendedConnector.getId()) && !task.modifyOp.forceStorage) {
-          callback.exception(new HttpException(BAD_REQUEST, "The storage of space " + space.getId()
-              + " [storage: " + space.getStorage().getId() + "] is not matching the storage of the space to be extended "
-              + "(" + extendedSpace.getId() + " [storage: " + extendedConnector.getId() + "])."));
+          callback.exception(new DetailedHttpException("E318408",
+                  Map.of("spaceId", space.getId(),
+                          "storageId", space.getStorage().getId(),
+                          "extendedSpaceId", extendedSpace.getId(),
+                          "extendedStorageId", extendedConnector.getId()))
+          );
           return;
         }
 
@@ -551,8 +650,12 @@ public class SpaceTaskHandler {
                 if (((Map<String, Object>) resolvedSecondLvlExtensions.get("extends")).containsKey("extends"))
                   callback.exception(new HttpException(BAD_REQUEST, "The space " + space.getId() + " cannot extend the space "
                       + extendedSpace.getId() + " because the maximum extension level is 2."));
-                else
+                else{
+                  //Store searchableProperties from base (but without storing them later)
+                  if (task.isCreate())
+                    task.resolvedSearchableProperties = secondLvlExtendedSpace.getSearchableProperties();
                   callback.call(task);
+                }
               });
         }
         else
@@ -594,6 +697,9 @@ public class SpaceTaskHandler {
     if (task.resolvedExtensions != null)
       storageParams.putAll(task.resolvedExtensions);
 
+    if(task.resolvedSearchableProperties != null)
+      space.withSearchableProperties(task.resolvedSearchableProperties);
+
     if (entry.isModified) {
       final ModifySpaceEvent event = new ModifySpaceEvent()
               .withOperation(op)
@@ -624,11 +730,14 @@ public class SpaceTaskHandler {
             entry.result = DatabindCodec.mapper().readValue(Json.encode(resultClone), Space.class);
           }
         }
-
+        //remove searchable properties from the result if the space has an extension
+        if(entry.result != null)
+          entry.result.withSearchableProperties(entry.result.getExtension() != null ? null : entry.result.getSearchableProperties());
         callback.call(task);
       };
       //Send "ModifySpaceEvent" to (all) the connector(s) to do some setup, update or clean up.
       query.execute(onEventProcessed, (t, e) -> callback.exception(e));
+
       return;
     }
     callback.call(task);
@@ -699,12 +808,13 @@ public class SpaceTaskHandler {
     Promise<Void> p = Promise.promise();
     Space.resolveConnector(marker, space.getStorage().getId())
         .onSuccess(connector -> RpcClient.getInstanceFor(connector).execute(marker, event, ar -> {
-          ChangesetsStatisticsResponse response = (ChangesetsStatisticsResponse) ar.result();
-          if( response != null )
-          { space.setReadOnlyHeadVersion(response.getMaxVersion());
-            p.complete();
+          if (ar.failed()) {
+            p.fail(ar.cause());
+            return;
           }
-          else p.fail("failed to get Changeset statistics");
+          ChangesetsStatisticsResponse changesetStatistics = (ChangesetsStatisticsResponse) ar.result();
+          space.setReadOnlyHeadVersion(changesetStatistics.getMaxVersion());
+          p.complete();
         }))
         .onFailure(p::fail);
     return p.future();
@@ -730,12 +840,18 @@ public class SpaceTaskHandler {
     final Future<List<Tag>> tagsFuture = Service.tagConfigClient.deleteTagsForSpace(task.getMarker(), spaceId)
         .onFailure(e->logger.error(task.getMarker(), "Failed to delete tags for space {}", spaceId, e));
 
-    final Future<Void> deactivateFuture = getAllDependentSpaces(task.getMarker(), spaceId)
+    final Future<Void> deactivateFuture = getAllExtendingSpaces(task.getMarker(), spaceId)
         .map(spaces -> spaces.stream().map(space -> Service.spaceConfigClient.store(task.getMarker(), (Space) space.withActive(false))).collect(Collectors.toList()))
         .map(Future::all)
         .mapEmpty();
 
-    Future.all(tagsFuture, deactivateFuture)
+    //Expire all data references linked to the space
+    final Future<Void> expireReferencesFuture = DataReferenceConfigClient.getInstance()
+        .expireForEntity(task.getMarker(), spaceId)
+        .onFailure(e -> logger.error(task.getMarker(),
+            "Failed to expire DataReferences for space {}", spaceId,  e));
+
+    Future.all(tagsFuture, deactivateFuture, expireReferencesFuture)
         .onComplete(v -> {
           if (v.failed())
             logger.error(task.getMarker(), "Failed to complete clean dependent resources for space {}", spaceId, v.cause());
@@ -746,11 +862,24 @@ public class SpaceTaskHandler {
   private static void resolveDependenciesForCreation(ConditionalOperation task, Callback<ConditionalOperation> callback) {
     final String spaceId = task.responseSpaces.get(0).getId();
 
+    String author = BaseHttpServerVerticle.getAuthor(task.context);
     // check if there are subscriptions with source pointing to the space id being created
     Service.subscriptionConfigClient.getBySource(task.getMarker(), spaceId)
         .compose(subscriptions -> {
           if (!subscriptions.isEmpty()) {
-            return TagApi.createTag(task.getMarker(), spaceId, Service.configuration.SUBSCRIPTION_TAG);
+            final Future<Tag> tagFuture = TagApi.createTag(task.getMarker(), spaceId, Service.configuration.SUBSCRIPTION_TAG, author);
+            Future<Void> spaceFuture = Future.succeededFuture();
+
+            if (task.responseSpaces.get(0).getVersionsToKeep() == 1) {
+              task.responseSpaces.get(0).setVersionsToKeep( SubscriptionHandler.v2kForSubscribedNonHistoryLayers );
+              spaceFuture = Service
+                  .spaceConfigClient
+                  .get(task.getMarker(), spaceId)
+                  .map(space -> (Space) space.withVersionsToKeep(SubscriptionHandler.v2kForSubscribedNonHistoryLayers))
+                  .compose(space -> Service.spaceConfigClient.store(task.getMarker(), space));
+            }
+
+            return Future.all(tagFuture, spaceFuture);
           }
 
           return Future.succeededFuture();
@@ -763,7 +892,7 @@ public class SpaceTaskHandler {
         });
   }
 
-  private static Future<List<Space>> getAllDependentSpaces(Marker marker, String spaceId) {
+  private static Future<List<Space>> getAllExtendingSpaces(Marker marker, String spaceId) {
     return Service.spaceConfigClient.getSpacesFromSuper(marker, spaceId)
         .compose(spaces -> {
           final List<Future<List<Space>>> childrenFutures = spaces.stream().map(space ->

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,14 @@
 
 package com.here.xyz.jobs.processes;
 
+import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.here.xyz.Typed;
 
+@JsonSubTypes({
+    @JsonSubTypes.Type(value = Maintain.class),
+    @JsonSubTypes.Type(value = Prune.class),
+    @JsonSubTypes.Type(value = CopyViaFiles.class)
+})
 public abstract class ProcessDescription implements Typed {
 
 }

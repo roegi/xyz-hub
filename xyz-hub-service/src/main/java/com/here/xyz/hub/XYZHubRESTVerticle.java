@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,21 +19,17 @@
 
 package com.here.xyz.hub;
 
-import static com.here.xyz.hub.task.Task.TASK;
-import static com.here.xyz.util.openapi.OpenApiGenerator.generate;
-import static io.vertx.core.http.HttpHeaders.CONTENT_LENGTH;
-import static io.vertx.core.http.HttpHeaders.LOCATION;
-
 import com.google.common.io.ByteStreams;
 import com.google.common.io.Files;
 import com.here.xyz.hub.auth.ExtendedJWTAuthHandler;
 import com.here.xyz.hub.auth.XyzAuthProvider;
 import com.here.xyz.hub.rest.AdminApi;
+import com.here.xyz.hub.rest.BranchApi;
 import com.here.xyz.hub.rest.ChangesetApi;
 import com.here.xyz.hub.rest.ConnectorApi;
+import com.here.xyz.hub.rest.DataReferenceApi;
 import com.here.xyz.hub.rest.FeatureApi;
 import com.here.xyz.hub.rest.FeatureQueryApi;
-import com.here.xyz.hub.rest.JobProxyApi;
 import com.here.xyz.hub.rest.SpaceApi;
 import com.here.xyz.hub.rest.SubscriptionApi;
 import com.here.xyz.hub.rest.TagApi;
@@ -51,18 +47,23 @@ import io.vertx.ext.auth.jwt.JWTAuthOptions;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.AuthenticationHandler;
-import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.StaticHandler;
 import io.vertx.ext.web.openapi.router.OpenAPIRoute;
 import io.vertx.ext.web.openapi.router.RouterBuilder;
 import io.vertx.openapi.contract.OpenAPIContract;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.io.File;
 import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Objects;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+
+import static com.here.xyz.hub.task.Task.TASK;
+import static com.here.xyz.util.openapi.OpenApiGenerator.generate;
+import static io.vertx.core.http.HttpHeaders.CONTENT_LENGTH;
+import static io.vertx.core.http.HttpHeaders.LOCATION;
 
 public class XYZHubRESTVerticle extends AbstractHttpServerVerticle {
 
@@ -128,23 +129,27 @@ public class XYZHubRESTVerticle extends AbstractHttpServerVerticle {
 
       final AuthenticationHandler jwtHandler = createJWTHandler();
       for (OpenAPIRoute route : rb.getRoutes()) {
-        route.addHandler(BodyHandler.create());
+        route.addHandler(createBodyHandler());
         route.addHandler(jwtHandler);
       }
 
-      new FeatureApi(rb);
+      FeatureApi featureApi = new FeatureApi(rb);
       new FeatureQueryApi(rb);
       new SpaceApi(rb);
+      BranchApi branchApi = new BranchApi(rb);
       new ConnectorApi(rb);
       new SubscriptionApi(rb);
       new ChangesetApi(rb);
-      new JobProxyApi(rb);
       new TagApi(rb);
+      new DataReferenceApi(rb);
 
       final Router router = rb.createRouter();
 
       new HealthApi(vertx, router);
       new AdminApi(vertx, router, jwtHandler);
+
+      featureApi.activatePrivateRoutes(router, jwtHandler);
+      branchApi.activateAdminRoutes(router, jwtHandler);
 
       //OpenAPI resources
       router.route("/hub/static/openapi/*").handler(createCorsHandler()).handler((routingContext -> {

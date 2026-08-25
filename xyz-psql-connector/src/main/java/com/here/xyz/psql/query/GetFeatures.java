@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2025 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,10 +21,14 @@ package com.here.xyz.psql.query;
 
 import static com.here.xyz.events.ContextAwareEvent.SpaceContext.COMPOSITE_EXTENSION;
 import static com.here.xyz.events.ContextAwareEvent.SpaceContext.DEFAULT;
+import static com.here.xyz.events.ContextAwareEvent.SpaceContext.X;
 import static com.here.xyz.models.hub.Ref.HEAD;
 import static com.here.xyz.psql.DatabaseWriter.ModificationType.DELETE;
 import static com.here.xyz.psql.DatabaseWriter.ModificationType.INSERT_HIDE_COMPOSITE;
 import static com.here.xyz.psql.DatabaseWriter.ModificationType.UPDATE_HIDE_COMPOSITE;
+import static com.here.xyz.psql.query.branching.BranchManager.branchTableName;
+import static com.here.xyz.psql.query.branching.BranchManager.getNodeId;
+import static com.here.xyz.responses.XyzError.EXCEPTION;
 import static com.here.xyz.responses.XyzError.PAYLOAD_TO_LARGE;
 import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.SCHEMA;
 import static com.here.xyz.util.db.pg.XyzSpaceTableHelper.TABLE;
@@ -35,13 +39,14 @@ import com.here.xyz.events.SelectiveEvent;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
 import com.here.xyz.models.hub.Ref;
 import com.here.xyz.psql.DatabaseWriter.ModificationType;
-import com.here.xyz.responses.ErrorResponse;
 import com.here.xyz.responses.XyzResponse;
+import com.here.xyz.util.db.ConnectorParameters;
 import com.here.xyz.util.db.SQLQuery;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResponse> extends ExtendedSpace<E, R> {
@@ -68,12 +73,12 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
 
       query = new SQLQuery(
           "SELECT * FROM (SELECT * FROM ("
-          + "     (SELECT ${{selectClause}} FROM ${schema}.${table} WHERE ${{filters}} ${{versionCheck}} ${{orderBy}})"
+          + "     (SELECT ${{selectClause}} FROM ${schema}.${table} e WHERE ${{filters}} ${{versionCheck}} ${{orderBy}})"
           + "   ${{unionAll}} "
           + "     SELECT * FROM (${{baseQuery}}) a"
           + "       ${{compositionFilter}}"
           + ") limitQuery ${{limit}}) orderQuery ${{outerOrderBy}}")
-          .withQueryFragment("selectClause", buildSelectClause(event, dataset))
+          .withQueryFragment("selectClause", buildSelectClause(event, dataset, 0))
           .withQueryFragment("filters", buildFiltersFragment(event, true, filterWhereClause, dataset))
           .withQueryFragment("orderBy", buildOrderByFragment(event))
           .withQueryFragment("versionCheck", versionCheckFragment)
@@ -83,10 +88,33 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
               ? build1LevelBaseQuery(event, filterWhereClause) //1-level extension
               : build2LevelBaseQuery(event, filterWhereClause)); //2-level extension
     }
+    else if (event.getNodeId() > 0) {
+      if (event.getBranchPath() == null || event.getBranchPath().isEmpty())
+        throw new ErrorResponseException(EXCEPTION, "Illegal event: Branch path must be provided if the node ID > 0 (not main branch)");
+
+      String rootTableName = getDefaultTable(event);
+
+      SQLQuery innerDataQuery = new SQLQuery("SELECT ${{selectClause}} FROM ${schema}.${table} WHERE ${{filters}} ${{versionCheck}}")
+          .withVariable(TABLE, rootTableName)
+          .withQueryFragment("selectClause", buildSelectClause(event, 0, 0))
+          .withQueryFragment("filters", buildFiltersFragment(event, false, filterWhereClause, 0))
+          .withQueryFragment("versionCheck", buildVersionCheckFragment(event, (Ref) event.getBranchPath().get(0), 0));
+
+      innerDataQuery = wrapAndBranch(event, innerDataQuery, filterWhereClause, rootTableName, event.getBranchPath());
+
+      query = new SQLQuery("""
+                            SELECT * FROM (
+                              ${{innerData}}
+                            ) ${{datasetId}} ${{orderBy}} ${{limit}}
+                            """)
+          .withQueryFragment("innerData", innerDataQuery)
+          .withQueryFragment("datasetId", "dataset" + event.getNodeId())
+          .withQueryFragment("orderBy", buildOuterOrderByFragment(event)); //TODO: Check if belows "outerOrderBy" really has to be called like that
+    }
     else {
       query = new SQLQuery(
           "SELECT ${{selectClause}} FROM ${schema}.${table} WHERE ${{filters}} ${{versionCheck}} ${{outerOrderBy}} ${{limit}}")
-          .withQueryFragment("selectClause", buildSelectClause(event, 0))
+          .withQueryFragment("selectClause", buildSelectClause(event, 0, 0))
           .withQueryFragment("filters", buildFiltersFragment(event, false, filterWhereClause, 0))
           .withQueryFragment("versionCheck", buildVersionCheckFragment(event));
     }
@@ -104,8 +132,46 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
 
     String tableVariable = isL2 ? "intermediateExtensionTable" : "table";
     return new SQLQuery("WHERE ${{exists}} exists(SELECT 1 FROM ${schema}.${" + tableVariable + "} WHERE ${{idComparison}})")
-        .withQueryFragment("exists", event.getContext() == COMPOSITE_EXTENSION && !isL2 ? "" : "NOT")
+        .withQueryFragment("exists", (event.getContext() == COMPOSITE_EXTENSION || event.getContext() == X) && !isL2 ? "" : "NOT")
         .withQueryFragment("idComparison", idComparisonFragment);
+  }
+
+  protected SQLQuery buildBranchCompositionFilter() {
+    return new SQLQuery("WHERE NOT EXISTS (SELECT 1 FROM ${schema}.${table} WHERE id = ${{datasetId}}.id ${{versionCheck}})");
+  }
+
+  private SQLQuery wrapAndBranch(E event, SQLQuery baseQuery, SQLQuery filterWhereClause, String rootTableName, List<Ref> remainingBranchPath) {
+    boolean isTopLevelBranch = remainingBranchPath.size() == 1;
+    Ref successorBaseRef = isTopLevelBranch ? null : remainingBranchPath.get(1);
+    int nodeId = isTopLevelBranch ? event.getNodeId() : getNodeId(successorBaseRef);
+    Ref baseRef = remainingBranchPath.get(0);
+    int baseNodeId = getNodeId(baseRef);
+    String branchTable = branchTableName(rootTableName, baseRef, nodeId);
+
+    SQLQuery branchDataQuery = new SQLQuery("SELECT ${{selectClause}} FROM ${schema}.${table} WHERE ${{filters}} ${{versionCheck}} ${{limit}}")
+        .withVariable(TABLE, branchTable)
+        .withQueryFragment("selectClause", buildSelectClause(event, nodeId, baseRef.getVersion()))
+        .withQueryFragment("filters", buildFiltersFragment(event, false, filterWhereClause, nodeId))
+        .withQueryFragment("versionCheck", buildVersionCheckFragment(event, successorBaseRef, baseRef.getVersion()));
+
+    SQLQuery wrappedBranchAndBaseQuery = new SQLQuery("""
+        (${{branchData}})
+        UNION ALL
+        (
+          SELECT * FROM (${{base}}) ${{datasetId}} ${{branchCompositionFilter}} ${{limit}}
+        )
+        """)
+        .withQueryFragment("branchData", branchDataQuery)
+        .withQueryFragment("base", baseQuery)
+        .withQueryFragment("datasetId", "dataset" + baseNodeId)
+        .withQueryFragment("branchCompositionFilter", buildBranchCompositionFilter())
+        .withVariable(TABLE, branchTable)
+        .withQueryFragment("versionCheck", branchDataQuery.getQueryFragment("versionCheck"));
+
+    return isTopLevelBranch
+        ? wrappedBranchAndBaseQuery
+        : wrapAndBranch(event, wrappedBranchAndBaseQuery, filterWhereClause, rootTableName,
+            remainingBranchPath.subList(1, remainingBranchPath.size()));
   }
 
   protected SQLQuery buildFiltersFragment(E event, boolean isExtension, SQLQuery filterWhereClause, int dataset) {
@@ -119,54 +185,93 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
     return new SQLQuery("TRUE");
   }
 
-  protected SQLQuery buildSelectClause(E event, int dataset) {
+  protected SQLQuery buildSelectClause(E event, int dataset, long baseVersion) {
+    SQLQuery jsonDataWithVersion = new SQLQuery("jsonb_set(${{innerJsonData}}, '{properties, @ns:com:here:xyz, version}', to_jsonb(${{featureVersion}} + ${{baseVersion}}::BIGINT)) AS jsondata")
+        .withQueryFragment("innerJsonData", buildJsonDataFragment(event))
+        .withQueryFragment("baseVersion", "" + baseVersion) //TODO: That's a workaround for a minor bug in SQLQuery
+        .withQueryFragment("featureVersion", isCompositeQuery(event) ? getFeatureVersion(event, dataset) : "version");
+
+
+    if(getTableLayout().equals(ConnectorParameters.TableLayout.NEW_LAYOUT)) {
+      jsonDataWithVersion = new SQLQuery("author, ${{innerJsonData}} AS jsondata")
+              .withQueryFragment("innerJsonData", buildJsonDataFragment(event))
+              .withQueryFragment("baseVersion", "" + baseVersion) //TODO: That's a workaround for a minor bug in SQLQuery
+              .withQueryFragment("featureVersion", isCompositeQuery(event) ? getFeatureVersion(event, dataset) : "version");
+    }
+
     return new SQLQuery("id, ${{version}}, ${{jsonData}}, ${{geo}}, ${{dataset}}")
-        .withQueryFragment("jsonData", buildJsonDataFragment(event, dataset))
+        .withQueryFragment("jsonData", jsonDataWithVersion)
         .withQueryFragment("geo", buildGeoFragment(event))
         .withQueryFragment("dataset", new SQLQuery("${{datasetNo}} AS dataset")
         .withQueryFragment("datasetNo", "" + dataset))
-        .withQueryFragment("version", getFeatureVersion(dataset) + " AS version");
+        .withQueryFragment("version", new SQLQuery("${{featureVersion}} + ${{baseVersion}}::BIGINT AS version")
+            .withQueryFragment("featureVersion", isCompositeQuery(event) ? getFeatureVersion(event, dataset) : "version")
+            .withQueryFragment("baseVersion", "" + baseVersion));
   }
 
   private SQLQuery buildVersionCheckFragment(E event) {
+    return buildVersionCheckFragment(event, null, 0);
+  }
+
+  private SQLQuery buildVersionCheckFragment(E event, Ref successorBaseRef, long baseVersion) {
+    Ref ref = successorBaseRef;
+    //In case this is not a branching-query simply take the requested ref from the event
+    //FIXME: Also is null if this method is called for the most top branch, in that case the event ref also has to be taken into account
+    if (ref == null)
+      ref = event.getRef();
+    //In case the requested version is smaller than the successor base version, take the smaller one.
+    else if (!event.getRef().isHead() && event.getRef().isSingleVersion() && event.getRef().getVersion() < ref.getVersion())
+      ref = event.getRef();
+    //In case the requested ref is a range ...
+    else if (event.getRef().isRange()) {
+      //... and partially overlaps with the version range of the branch ...
+      if (event.getRef().getStart().getVersion() < ref.getVersion())
+        //... shrink the range to the overlapping part
+        ref = new Ref(event.getRef().getStart(), event.getRef().getEnd().isHead() || event.getRef().getEnd().getVersion() > ref.getVersion() ? ref : event.getRef().getEnd());
+      else
+        //... otherwise the range has no overlap with the branch so pass the "empty-range" ref
+        ref = new Ref(successorBaseRef, successorBaseRef);
+    }
+
     if (!(event instanceof SelectiveEvent selectiveEvent))
       return new SQLQuery("");
 
     return new SQLQuery("${{versionComparison}} ${{nextVersion}} ${{minVersion}}")
-        .withQueryFragment("versionComparison", buildVersionComparison(selectiveEvent))
-        .withQueryFragment("nextVersion", buildNextVersionFragment(selectiveEvent))
-        .withQueryFragment("minVersion", buildMinVersionFragment(selectiveEvent));
+        .withQueryFragment("versionComparison", buildVersionComparison(selectiveEvent, ref, baseVersion))
+        .withQueryFragment("nextVersion", buildNextVersionFragment(selectiveEvent, ref, baseVersion))
+        .withQueryFragment("minVersion", buildMinVersionFragment(selectiveEvent, baseVersion));
   }
 
-  private SQLQuery buildVersionComparison(SelectiveEvent event) {
-    Ref ref = event.getRef();
+  private SQLQuery buildVersionComparison(SelectiveEvent event, Ref ref, long baseVersion) {
     if (event.getVersionsToKeep() == 1 || ref.isAllVersions() || ref.isHead())
       return new SQLQuery("");
 
     if (ref.isRange())
-      return new SQLQuery("AND version > #{startVersion} AND version <= #{endVersion}")
-          .withNamedParameter("startVersion", ref.getStart().getVersion())
-          .withNamedParameter("endVersion", ref.getEnd().getVersion());
+      return new SQLQuery("AND version > ${{startVersion}}::BIGINT ${{endVersionCheck}}")
+          .withQueryFragment("startVersion", "" + (ref.getStart().getVersion() - baseVersion)) //TODO: That's a workaround for a minor bug in SQLQuery
+          .withQueryFragment("endVersionCheck", ref.getEnd().isHead()
+              ? new SQLQuery("")
+              : new SQLQuery("AND version <= ${{endVersion}}::BIGINT")
+                  .withQueryFragment("endVersion", "" + (ref.getEnd().getVersion() - baseVersion))); //TODO: That's a workaround for a minor bug in SQLQuery
 
-    return new SQLQuery("AND version <= #{requestedVersion}")
-        .withNamedParameter("requestedVersion", ref.getVersion());
+    return new SQLQuery("AND version <= ${{requestedVersion}}::BIGINT")
+        .withQueryFragment("requestedVersion", "" + (ref.getVersion() - baseVersion)); //TODO: That's a workaround for a minor bug in SQLQuery
   }
 
-  private SQLQuery buildNextVersionFragment(SelectiveEvent event) {
-    return buildNextVersionFragment(event.getRef(), event.getVersionsToKeep() > 1,
-        "requestedVersion");
+  private SQLQuery buildNextVersionFragment(SelectiveEvent event, Ref ref, long baseVersion) {
+    return buildNextVersionFragment(ref, event.getVersionsToKeep() > 1, "requestedVersion", baseVersion);
   }
 
-  private SQLQuery buildNextVersionFragment(Ref ref, boolean historyEnabled, String versionParamName) {
+  protected SQLQuery buildNextVersionFragment(Ref ref, boolean historyEnabled, String versionParamName, long baseVersion) {
     if (!historyEnabled || ref.isAllVersions())
       return new SQLQuery("");
 
     boolean maxVersionIsHead = ref.isHead() || ref.isRange() && ref.getEnd().isHead();
-    long maxVersion = maxVersionIsHead ? MAX_BIGINT : ref.isRange() ? ref.getEnd().getVersion() : ref.getVersion();
+    long maxVersion = maxVersionIsHead ? MAX_BIGINT : (ref.isRange() ? ref.getEnd().getVersion() : ref.getVersion()) - baseVersion;
 
-    return new SQLQuery("AND next_version ${{op}} #{" + versionParamName + "}")
+    return new SQLQuery("AND next_version ${{op}} ${{" + versionParamName + "}}::BIGINT")
         .withQueryFragment("op", maxVersionIsHead ? "=" : ">")
-        .withNamedParameter(versionParamName, maxVersion);
+        .withQueryFragment(versionParamName, "" + maxVersion); //TODO: That's a workaround for a minor bug in SQLQuery
   }
 
   private SQLQuery buildBaseVersionCheckFragment(String versionParamName) {
@@ -174,22 +279,25 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
     Always assume HEAD version for base spaces and also assume history to be enabled,
     because from the even we don't know whether it is enabled or not.
      */
-    return buildNextVersionFragment(new Ref(HEAD), true, versionParamName);
+    return buildNextVersionFragment(new Ref(HEAD), true, versionParamName, 0);
   }
 
-  private SQLQuery buildMinVersionFragment(SelectiveEvent event) {
+  protected SQLQuery buildMinVersionFragment(SelectiveEvent event, long baseVersion) {
     Ref ref = event.getRef();
     boolean isHeadOrAllVersions = ref.isHead() || ref.isAllVersions() || ref.isRange() && ref.getEnd().isHead();
     long requestedVersion = isHeadOrAllVersions ? Long.MAX_VALUE : ref.isRange() ? ref.getEnd().getVersion() : ref.getVersion();
 
-    if (event.getVersionsToKeep() > 1)
-      return new SQLQuery("AND greatest(#{minVersion}, (SELECT max(version) - #{versionsToKeep} FROM ${schema}.${table})) <= #{requestedVersion}")
+    if (event.getVersionsToKeep() > 1) {
+      return new SQLQuery("AND greatest(#{minVersion}, (SELECT max(version) + ${{baseVersion}} - #{versionsToKeep} FROM ${schema}.${table})) <= ${{requestedVersion}}")
           .withNamedParameter("versionsToKeep", event.getVersionsToKeep())
           .withNamedParameter("minVersion", event.getMinVersion())
-          .withNamedParameter("requestedVersion", requestedVersion);
+          .withQueryFragment("baseVersion", baseVersion + "::BIGINT") //TODO: That's a workaround for a minor bug in SQLQuery
+          .withQueryFragment("requestedVersion", requestedVersion + "::BIGINT"); //TODO: That's a workaround for a minor bug in SQLQuery
+    }
 
-    return isHeadOrAllVersions ? new SQLQuery("") : new SQLQuery("AND #{requestedVersion} = (SELECT max(version) AS HEAD FROM ${schema}.${table})")
-        .withNamedParameter("requestedVersion", requestedVersion);
+    return isHeadOrAllVersions || ref.isRange() ? new SQLQuery("") : new SQLQuery("AND ${{requestedVersion}} = (SELECT max(version) + ${{baseVersion}} AS HEAD FROM ${schema}.${table})")
+        .withQueryFragment("requestedVersion", requestedVersion + "::BIGINT")
+        .withQueryFragment("baseVersion", baseVersion + "::BIGINT"); //TODO: That's a workaround for a minor bug in SQLQuery
   }
 
   private SQLQuery buildAuthorCheckFragment(E event) {
@@ -204,7 +312,7 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
     int dataset = compositeDatasetNo(event, CompositeDataset.SUPER);
     return new SQLQuery("SELECT ${{selectClause}} FROM ${schema}.${extendedTable} WHERE ${{filters}} ${{versionCheck}} ${{orderBy}}")
         .withVariable("extendedTable", getExtendedTable(event))
-        .withQueryFragment("selectClause", buildSelectClause(event, dataset))
+        .withQueryFragment("selectClause", buildSelectClause(event, dataset, 0))
         .withQueryFragment("filters", buildFiltersFragment(event, false, filterWhereClause, dataset)) //NOTE: We know that the base space is not an extended one
         .withQueryFragment("versionCheck", buildBaseVersionCheckFragment("base1Version"))
         .withQueryFragment("orderBy", buildOrderByFragment(event));
@@ -220,7 +328,7 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
         + "  SELECT * FROM (${{baseQuery}}) b"
         + "    ${{compositionFilter}}")
         .withVariable("intermediateExtensionTable", getIntermediateTable(event))
-        .withQueryFragment("selectClause", buildSelectClause(event, dataset))
+        .withQueryFragment("selectClause", buildSelectClause(event, dataset, 0))
         .withQueryFragment("filters", buildFiltersFragment(event, false, filterWhereClause, dataset)) //NOTE: We know that the intermediate space is an extended one
         .withQueryFragment("versionCheck", versionCheckFragment)
         .withQueryFragment("orderBy", buildOrderByFragment(event))
@@ -230,11 +338,15 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
 
   private SQLQuery buildIdComparisonFragment(E event, String prefix, SQLQuery versionCheckFragment) {
     return new SQLQuery("id = " + prefix + "id"
-        + (event instanceof SelectiveEvent ? " ${{versionCheck}} AND operation != 'D'" : ""))
-        .withQueryFragment("versionCheck", versionCheckFragment);
+        + (event instanceof SelectiveEvent ? " ${{versionCheck}} ${{deletionInclusionFragment}}" : ""))
+        .withQueryFragment("versionCheck", versionCheckFragment)
+        .withQueryFragment("deletionInclusionFragment", event.getContext() == X ? "AND operation = 'D'" : "AND operation != 'D'");
   }
 
   private SQLQuery buildDeletionCheckFragment(E event, boolean isExtension) {
+    if (isExtension && event.getContext() == X)
+      return buildContextXDeletionCheckFragment(event);
+
     if (!historyEnabled && !isExtension
         || event instanceof SelectiveEvent selectiveEvent && selectiveEvent.getRef().isRange())
       return new SQLQuery("");
@@ -246,12 +358,26 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
             : new ModificationType[]{DELETE}).map(ModificationType::toString).toArray(String[]::new));
   }
 
+  private SQLQuery buildContextXDeletionCheckFragment(E event) {
+    return new SQLQuery("""
+        AND NOT (
+          operation = 'D'
+          AND EXISTS (
+            SELECT 1
+            FROM ${schema}.${extendedTable}
+            WHERE id = e.id
+          )
+        )
+        """)
+        .withVariable("extendedTable", getExtendedTable(event));
+  }
+
   protected SQLQuery buildLimitFragment(E event) {
     return new SQLQuery("");
   }
 
   protected boolean isCompositeQuery(E event) {
-    return isExtendedSpace(event) && (event.getContext() == DEFAULT || event.getContext() == COMPOSITE_EXTENSION);
+    return isExtendedSpace(event) && (event.getContext() == DEFAULT || event.getContext() == COMPOSITE_EXTENSION || event.getContext() == X);
   }
 
   /**
@@ -263,40 +389,74 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
    */
   @Override
   public R handle(ResultSet rs) throws SQLException {
-    StringBuilder result = new StringBuilder();
-    String prefix = "[";
-    result.append(prefix);
+    LazyParsableFeatureCollection fc = new LazyParsableFeatureCollection();
 
-    while (rs.next() && MAX_RESULT_SIZE > result.length())
-      handleFeature(rs, result);
+    while (rs.next()) {
+      try {
+        fc.addFeature(content -> handleFeature(rs, content));
+      }
+      catch (ErrorResponseException e) {
+        //TODO: Throw ErrorResponseException instead
+        return (R) e.getErrorResponse();
+      }
+    }
 
-    if (result.length() > prefix.length())
-      result.setLength(result.length() - 1);
-
-    result.append("]");
-
-    final FeatureCollection featureCollection = new FeatureCollection();
-    featureCollection._setFeatures(result.toString());
-
-    if (result.length() > MAX_RESULT_SIZE)
-      //TODO: Throw ErrorResponseException instead
-      return (R) new ErrorResponse().withError(PAYLOAD_TO_LARGE)
-          .withErrorMessage("Maximum response char limit of " + MAX_RESULT_SIZE + " reached");
-
-    return (R) featureCollection;
+    return (R) fc.build();
   }
 
   protected void handleFeature(ResultSet rs, StringBuilder result) throws SQLException {
     String geom = rs.getString("geo");
-    result.append(rs.getString("jsondata"));
+    if(getTableLayout().equals(ConnectorParameters.TableLayout.OLD_LAYOUT))
+      result.append(rs.getString("jsondata"));
+    else if(getTableLayout().equals(ConnectorParameters.TableLayout.NEW_LAYOUT))
+      result.append(injectValuesIntoNameSpace(rs.getString("jsondata"), rs.getLong("version"), rs.getString("author")));
     result.setLength(result.length() - 1);
     result.append(",\"geometry\":");
     result.append(geom == null ? "null" : geom);
     result.append("}");
-    result.append(",");
   }
 
-  protected SQLQuery buildJsonDataFragment(ContextAwareEvent event, int dataset) {
+  private String injectValuesIntoNameSpace(String jsonData, long version, String author) {
+    String namespacePattern = "(\"@ns:com:here:xyz\"\\s*:\\s*\\{)";
+    //The NS always contains the updatedAt property, so we need a trailing comma.
+    String versionAuthor = "$1\"version\":" + version + ",\"author\":\"" + author + "\",";
+
+    return jsonData.replaceAll(namespacePattern, versionAuthor);
+  }
+
+  protected static class LazyParsableFeatureCollection {
+    public static final String PREFIX = "[";
+    public static final String SUFFIX = "]";
+
+    private StringBuilder content = new StringBuilder().append(PREFIX);
+
+    public void addFeature(FeatureAppender featureAppender) throws ErrorResponseException, SQLException {
+      featureAppender.appendFeature(content);
+
+      if( content.length() > PREFIX.length() && content.charAt(content.length() - 1) != ',' ) //prevent inserting additionals ',' in case featureAppender.appendFeature(content) does nop
+       content = content.append(",");
+
+      if (content.length() > MAX_RESULT_SIZE)
+        throw new ErrorResponseException(PAYLOAD_TO_LARGE, "Maximum response char limit of " + MAX_RESULT_SIZE + " reached");
+    }
+
+    public FeatureCollection build() {
+      final FeatureCollection featureCollection = new FeatureCollection();
+
+      if (content.length() > PREFIX.length() && content.charAt(content.length() - 1) == ',' )
+       content.setLength(content.length() - 1); //Removes the last extra comma
+
+      featureCollection._setFeatures(content.append(SUFFIX).toString());
+      return featureCollection;
+    }
+
+    @FunctionalInterface
+    interface FeatureAppender {
+      void appendFeature(StringBuilder content) throws ErrorResponseException, SQLException;
+    }
+  }
+
+  protected SQLQuery buildJsonDataFragment(E event) {
     SQLQuery jsonData;
 
     if (!(event instanceof SelectiveEvent selectiveEvent) || selectiveEvent.getSelection() == null)
@@ -307,25 +467,24 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
       selection.add("type");
 
       jsonData = selection.isEmpty() ? new SQLQuery("jsondata") : new SQLQuery("(SELECT "
-          + "CASE WHEN prj_build->'properties' IS NOT NULL THEN prj_build "
-          + "ELSE jsonb_set(prj_build, '{properties}', '{}'::jsonb) "
+          + "CASE WHEN projected::JSONB->'properties' IS NOT NULL THEN projected::JSONB "
+          + "ELSE jsonb_set(projected::JSONB, '{properties}', '{}'::jsonb) "
           + "END "
-          + "FROM prj_build(#{selection}, jsondata))")
+          + "FROM prj_build(#{selection}, jsondata::TEXT) AS projected)")
           .withNamedParameter("selection", selection.toArray(new String[0]));
     }
-
-    return new SQLQuery("jsonb_set(${{innerJsonData}}, '{properties, @ns:com:here:xyz, version}', to_jsonb(${{featureVersion}})) AS jsondata")
-        .withQueryFragment("innerJsonData", jsonData)
-        .withQueryFragment("featureVersion", getFeatureVersion(dataset));
+    return jsonData;
   }
 
-  private static String getFeatureVersion(int dataset) {
+  private String getFeatureVersion(E event, int dataset) {
+    int topLevelDataset = compositeDatasetNo(event, CompositeDataset.EXTENSION);
     /*
     NOTE: From the perspective of a composite layer (requested with context = DEFAULT),
-    the extended dataset(s) always have version = 0, because the extension itself *is empty* and this *empty version (aka version 0)*
-    is simply not empty but contains the whole HEAD of the dataset being extended (e.g., INTERMEDIATE and / or SUPER dataset).
+    the extended dataset(s) always have version = 0, because at the beginning the extension itself *is empty* and
+    this *empty version (aka version 0)* is simply not empty but contains the whole HEAD
+    of the dataset being extended (e.g., INTERMEDIATE and / or SUPER dataset).
      */
-    return dataset > 0 ? "0" : "version";
+    return dataset < topLevelDataset ? "0" : "version";
   }
 
   protected String buildOuterOrderByFragment(ContextAwareEvent event) {
@@ -372,9 +531,9 @@ public abstract class GetFeatures<E extends ContextAwareEvent, R extends XyzResp
 
   protected int compositeDatasetNo(E event, CompositeDataset dataset) {
     return switch (dataset) {
-      case EXTENSION -> 0;
+      case EXTENSION -> !isCompositeQuery(event) ? 0 :  is2LevelExtendedSpace(event) ? 2 : isExtendedSpace(event) ? 1 : 0;
       case INTERMEDIATE -> 1;
-      case SUPER -> is2LevelExtendedSpace(event) ? 2 : 1;
+      case SUPER -> 0;
     };
   }
 }

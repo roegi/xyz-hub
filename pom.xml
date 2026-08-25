@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  ~ Copyright (C) 2017-2025 HERE Europe B.V.
+  ~ Copyright (C) 2017-2026 HERE Europe B.V.
   ~
   ~ Licensed under the Apache License, Version 2.0 (the "License");
   ~ you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@
 
   <groupId>com.here.xyz</groupId>
   <artifactId>xyz-hub</artifactId>
-  <version>3.17.12-SNAPSHOT</version>
+  <version>3.23.59-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <modules>
@@ -100,6 +100,7 @@
     <lambda-core-version>1.2.1</lambda-core-version>
     <log4j-version>2.20.0</log4j-version>
     <aws-log4j-version>1.5.1</aws-log4j-version>
+    <jayway-jsonpath-version>2.10.0</jayway-jsonpath-version>
   </properties>
 
   <!-- Release settings -->
@@ -386,6 +387,17 @@
       </dependency>
       <dependency>
         <groupId>software.amazon.awssdk</groupId>
+        <artifactId>s3control</artifactId>
+        <version>${aws-sdk2-version}</version>
+        <exclusions>
+          <exclusion>
+            <artifactId>jackson-annotations</artifactId>
+            <groupId>com.fasterxml.jackson.core</groupId>
+          </exclusion>
+        </exclusions>
+      </dependency>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
         <artifactId>auth</artifactId>
         <version>${aws-sdk2-version}</version>
         <exclusions>
@@ -650,6 +662,11 @@
         <groupId>com.lmax</groupId>
         <version>3.4.4</version>
       </dependency>
+      <dependency>
+        <groupId>com.jayway.jsonpath</groupId>
+        <artifactId>json-path</artifactId>
+        <version>${jayway-jsonpath-version}</version>
+      </dependency>
 
       <!-- Testing -->
       <dependency>
@@ -733,12 +750,12 @@
       <dependency>
         <groupId>com.mchange</groupId>
         <artifactId>mchange-commons-java</artifactId>
-        <version>0.2.20</version>
+        <version>0.4.0</version>
       </dependency>
       <dependency>
         <groupId>com.mchange</groupId>
         <artifactId>c3p0</artifactId>
-        <version>0.9.5.5</version>
+        <version>0.12.0</version>
       </dependency>
       <dependency>
         <artifactId>mapbox-vector-tile</artifactId>

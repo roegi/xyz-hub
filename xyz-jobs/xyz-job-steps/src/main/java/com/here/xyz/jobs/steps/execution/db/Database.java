@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import com.here.xyz.jobs.steps.resources.ExecutionResource;
 import com.here.xyz.models.hub.Connector;
 import com.here.xyz.util.Hasher;
 import com.here.xyz.util.db.ConnectorParameters;
+import com.here.xyz.util.db.DBClusterResolver;
 import com.here.xyz.util.db.ECPSTool;
 import com.here.xyz.util.db.datasource.DataSourceProvider;
 import com.here.xyz.util.db.datasource.DatabaseSettings;
@@ -42,30 +43,27 @@ import com.here.xyz.util.web.HubWebClientAsync;
 import com.here.xyz.util.web.XyzWebClient.WebClientException;
 import io.vertx.core.Future;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.xbill.DNS.Lookup;
-import org.xbill.DNS.Name;
-import org.xbill.DNS.Record;
 import software.amazon.awssdk.services.rds.model.DBCluster;
 
 public class Database extends ExecutionResource {
+  private static final int STATEMENT_TIMEOUT = 895; //seconds - has to be greater than the query timeout
+  private static final int DB_CHECKOUT_TIMEOUT_MS = 20_000;
+  private static final int DB_ACQUIRE_RETRY_DELAY_MS = 5_000;
+  private static final int DB_ACQUIRE_RETRY_ATTEMPTS = 10;
+  private static final int DB_ACQUIRE_INCREMENT = 3;
+  private static final int DB_MAX_POOL_SIZE = 10;
   private static final List<ScriptResourcePath> SCRIPT_RESOURCE_PATHS = List.of(new ScriptResourcePath("/sql", "jobs", "common"), new ScriptResourcePath("/jobs", "jobs"));
   private static final Logger logger = LogManager.getLogger();
   private static final float DB_MAX_JOB_UTILIZATION_PERCENTAGE = 0.6f;
-  private static final Pattern RDS_CLUSTER_HOSTNAME_PATTERN = Pattern.compile("(.+).cluster-.*.rds.amazonaws.com.*");
   private static Cache<String, List<Database>> cache = CacheBuilder
       .newBuilder()
       .expireAfterWrite(3, TimeUnit.MINUTES)
@@ -114,11 +112,21 @@ public class Database extends ExecutionResource {
 
   DatabaseSettings getDatabaseSettings() {
     if (dbSettings == null)
-      dbSettings = new RestrictedDatabaseSettings(getName(), connectorDbSettingsMap)
-          .withApplicationName("JobFramework")
-          .withScriptResourcePaths(SCRIPT_RESOURCE_PATHS);
-    dbSettings.setStatementTimeoutSeconds(600);
+      dbSettings = applyRuntimeDbSettings(new RestrictedDatabaseSettings(getName(), connectorDbSettingsMap));
     return dbSettings;
+  }
+
+  private static DatabaseSettings applyRuntimeDbSettings(DatabaseSettings settings) {
+    settings
+        .withStatementTimeoutSeconds(STATEMENT_TIMEOUT)
+        .withDbCheckoutTimeout(DB_CHECKOUT_TIMEOUT_MS)
+        .withDbAcquireRetryDelay(DB_ACQUIRE_RETRY_DELAY_MS)
+        .withDbAcquireRetryAttempts(DB_ACQUIRE_RETRY_ATTEMPTS)
+        .withDbAcquireIncrement(DB_ACQUIRE_INCREMENT)
+        .withDbMaxPoolSize(DB_MAX_POOL_SIZE)
+        .withScriptResourcePaths(SCRIPT_RESOURCE_PATHS)
+        .withApplicationName("JobFramework");
+    return settings;
   }
 
   public static Future<List<Database>> getAll() {
@@ -210,11 +218,9 @@ public class Database extends ExecutionResource {
             connectorParameters.getEcps());
         fixLocalDbHosts(connectorDbSettingsMap);
 
-        DatabaseSettings connectorDbSettings = new DatabaseSettings(connector.id, connectorDbSettingsMap)
-            .withDbMaxPoolSize(10)
-            .withScriptResourcePaths(SCRIPT_RESOURCE_PATHS);
+        DatabaseSettings connectorDbSettings = applyRuntimeDbSettings(new DatabaseSettings(connector.id, connectorDbSettingsMap));
 
-        String rdsClusterId = getClusterIdFromHostname(connectorDbSettings.getHost());
+        String rdsClusterId = DBClusterResolver.getClusterIdFromHostname(connectorDbSettings.getHost());
 
         if (rdsClusterId == null) {
           logger.warn("No cluster ID detected for hostname of DB \"" + connector.id + "\". Taking it into account as simple writer DB.");
@@ -261,33 +267,6 @@ public class Database extends ExecutionResource {
           allDbs.remove(db);
       allDbs.addAll(databases);
     }
-  }
-
-  public static String getClusterIdFromHostname(String hostname) {
-    if(hostname == null) return null;
-    return Optional.ofNullable(extractClusterId(hostname)).orElse(resolveAndExtractClusterId(hostname));
-  }
-
-  private static String extractClusterId(String url) {
-    Matcher matcher = RDS_CLUSTER_HOSTNAME_PATTERN.matcher(url);
-    return matcher.matches() ? matcher.group(1) : null;
-  }
-
-  private static String resolveAndExtractClusterId(String hostname) {
-    try {
-      Lookup lookup = new Lookup(hostname);
-
-      List<String> records = Arrays.stream(lookup.run()).map(Record::toString).collect(Collectors.toList());
-      records.addAll(Arrays.stream(lookup.getAliases()).map(Name::toString).collect(Collectors.toList()));
-
-      for(String record : records) {
-        String clusterId = extractClusterId(record);
-        if(clusterId != null) return clusterId;
-      }
-    } catch (Exception e) {
-      // Do nothing
-    }
-    return null;
   }
 
   public String getName() {

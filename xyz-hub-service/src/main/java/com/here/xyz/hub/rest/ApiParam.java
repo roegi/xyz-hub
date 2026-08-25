@@ -99,6 +99,8 @@ public class ApiParam {
     static final String H3_INDEX = "h3Index";
     static final String CONTENT_UPDATED_AT = "contentUpdatedAt";
     static final String CONTEXT = "context";
+    static final String EXTENDING_SPACES = "extendingSpaces";
+    static final String ERASE_CONTENT = "eraseContent";
 
     static final String CLUSTERING_PARAM_RESOLUTION = "resolution";
     static final String CLUSTERING_PARAM_RESOLUTION_RELATIVE = "relativeResolution";
@@ -125,6 +127,8 @@ public class ApiParam {
     static final String END_VERSION = "endVersion";
     static final String PAGE_TOKEN = "pageToken";
     static final String AUTHOR = "author";
+    static final String START_TIME = "startTime";
+    static final String END_TIME = "endTime";
 
     static final String F_PREFIX = "f.";
 

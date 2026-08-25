@@ -1,5 +1,24 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ * License-Filename: LICENSE
+ */
+
+/*
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,25 +39,48 @@
 /**
  * Install required extensions
  */
-DO $installExtensions$
+DO $initializeDatabase$
+    DECLARE
+        config_schema_name text := 'xyz_config';
+        --Deprecated
+        config_space_meta_table text := 'space_meta';
+        original_search_path text := current_setting('search_path');
     BEGIN
-    
-     CREATE EXTENSION IF NOT EXISTS postgis SCHEMA public;
-     CREATE EXTENSION IF NOT EXISTS postgis_topology;
-     CREATE EXTENSION IF NOT EXISTS tsm_system_rows SCHEMA public;
-     CREATE EXTENSION IF NOT EXISTS dblink SCHEMA public;
-     CREATE EXTENSION IF NOT EXISTS plv8 SCHEMA pg_catalog;
+        IF EXISTS(SELECT extname FROM pg_extension WHERE extname = 'postgis') THEN
+            --Skip init of db
+            RETURN;
+        END IF;
 
-     IF EXISTS ( SELECT 1 FROM pg_settings WHERE name IN ( 'rds.extensions', 'rds.allowed_extensions', 'rds.superuser_variables' ) ) THEN
-      CREATE EXTENSION IF NOT EXISTS aws_s3 CASCADE;
-      CREATE EXTENSION IF NOT EXISTS aws_lambda CASCADE;
-     ELSE
-      CREATE EXTENSION IF NOT EXISTS plpython3u CASCADE;
-      CREATE EXTENSION IF NOT EXISTS aws_s3 CASCADE;
-     END IF;
-     
-    END;
-$installExtensions$;
+        -- Install required extensions
+        CREATE EXTENSION IF NOT EXISTS postgis SCHEMA public;
+        CREATE EXTENSION IF NOT EXISTS postgis_topology;
+        CREATE EXTENSION IF NOT EXISTS tsm_system_rows SCHEMA public;
+        CREATE EXTENSION IF NOT EXISTS dblink SCHEMA public;
+        CREATE EXTENSION IF NOT EXISTS plv8 SCHEMA pg_catalog;
+
+        IF EXISTS ( SELECT 1 FROM pg_settings WHERE name IN ( 'rds.extensions', 'rds.allowed_extensions', 'rds.superuser_variables' ) ) THEN
+            CREATE EXTENSION IF NOT EXISTS aws_s3 CASCADE;
+            CREATE EXTENSION IF NOT EXISTS aws_lambda CASCADE;
+        ELSE
+            CREATE EXTENSION IF NOT EXISTS plpython3u CASCADE;
+            CREATE EXTENSION IF NOT EXISTS aws_s3 CASCADE;
+        END IF;
+
+        -- Deprecated - can be removed if the below tables are not used anymore
+        EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', config_schema_name);
+
+        EXECUTE format('CREATE TABLE IF NOT EXISTS %I.%I (
+            id text NOT NULL,
+            schem text NOT NULL,
+            h_id text,
+            meta jsonb,
+            CONSTRAINT xyz_space_meta_pkey PRIMARY KEY (id, schem)
+        );', config_schema_name, config_space_meta_table);
+
+        --Ensure to restore the original search path because some of the installations above might have changed it
+        EXECUTE format('SET search_path = %s', original_search_path);
+END;
+$initializeDatabase$;
 
 /**
  * Returns a context field's value.
@@ -80,6 +122,24 @@ END
 $BODY$ LANGUAGE plpgsql VOLATILE;
 
 /**
+ * This function is like coalesce() except that it returns the *index* of the first
+ * non-null element within the specified array.
+ */
+CREATE OR REPLACE FUNCTION coalesce_subscript(anyarray) RETURNS integer AS $BODY$
+    SELECT i
+    FROM generate_subscripts($1, 1) AS i
+    WHERE $1[i] IS NOT NULL
+    ORDER BY i
+    LIMIT 1;
+$BODY$ LANGUAGE SQL IMMUTABLE
+PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION array_reverse(anyarray) RETURNS anyarray LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE AS $BODY$
+    SELECT array_agg(val ORDER BY ordinality DESC)
+    FROM unnest($1) WITH ORDINALITY AS t(val, ordinality);
+$BODY$;
+
+/**
  * This function can be used to write logs, if we run in Async mode.
  */
 CREATE OR REPLACE FUNCTION write_log(log_msg text, log_source text, log_level text DEFAULT 'INFO') RETURNS VOID AS
@@ -113,26 +173,26 @@ CREATE OR REPLACE FUNCTION calculate_space_statistics(
 )
 RETURNS TABLE(table_size bigint, table_count bigint, is_estimated boolean, min_version bigint, max_version bigint) AS
 $BODY$
-DECLARE 	
+DECLARE
     count_table bigint :=0;
 	count_ext_table bigint :=0;
 BEGIN
-	IF context NOT IN ('DEFAULT','SUPER','EXTENSION') THEN 
+	IF context NOT IN ('DEFAULT','SUPER','EXTENSION') THEN
 		RAISE EXCEPTION 'Unknown context: %!', context;
 	END IF;
-	
-	IF space_ext_table IS NULL THEN		
+
+	IF space_ext_table IS NULL THEN
 		EXECUTE format(
 		    'SELECT (SELECT COALESCE((meta->>''minAvailableVersion'')::BIGINT,0) FROM xyz_config.space_meta WHERE h_id=%1$L), '
 	            || 'MAX(version), pg_total_relation_size(%2$L) FROM %2$s',
 		    regexp_replace(replace(space_table::text, '"', ''), '_head$', '') , space_table
 		) INTO min_version, max_version, table_size;
-		
+
 		RETURN QUERY SELECT table_size, A.table_count, A.is_estimated, min_version, max_version
 		FROM fetch_table_count(space_table) A;
-	ELSE 
+	ELSE
 		EXECUTE format('SELECT (SELECT COALESCE((meta->>''minAvailableVersion'')::BIGINT,0) FROM xyz_config.space_meta WHERE h_id=%1$L), '
-				|| 'MAX(version), pg_total_relation_size(%2$L) FROM %2$s', 
+				|| 'MAX(version), pg_total_relation_size(%2$L) FROM %2$s',
 			(CASE context
 				WHEN 'SUPER' THEN regexp_replace(replace(space_ext_table::text, '"', ''), '_head$', '')
 				ELSE regexp_replace(replace(space_table::text, '"', ''), '_head$', '')
@@ -141,16 +201,16 @@ BEGIN
 				WHEN 'SUPER' THEN space_ext_table
 				ELSE space_table
 			END)
-		) INTO min_version, max_version, table_size;	
+		) INTO min_version, max_version, table_size;
 
 		CASE context
 		    WHEN 'SUPER' THEN RETURN QUERY SELECT table_size, A.table_count, A.is_estimated, min_version, max_version
 				FROM fetch_table_count(space_ext_table) A;
-		    WHEN 'EXTENSION' THEN RETURN QUERY SELECT table_size, A.table_count, A.is_estimated, min_version, max_version 
+		    WHEN 'EXTENSION' THEN RETURN QUERY SELECT table_size, A.table_count, A.is_estimated, min_version, max_version
 				FROM fetch_table_count(space_table) A;
-		    WHEN 'DEFAULT' THEN 
+		    WHEN 'DEFAULT' THEN
 				table_size = table_size + pg_total_relation_size(space_ext_table);
-				RETURN QUERY 				
+				RETURN QUERY
 					SELECT table_size, SUM(C.table_count)::BIGINT, BOOL_OR(C.is_estimated), min_version, max_version
 					FROM(
 						SELECT A.table_count, A.is_estimated FROM fetch_table_count(space_table) A
@@ -161,7 +221,8 @@ BEGIN
 	END IF;
 END;
 $BODY$
-LANGUAGE plpgsql VOLATILE;
+LANGUAGE plpgsql STABLE
+PARALLEL SAFE;
 
 /**
  * This function can be used to get the count of a table.
@@ -185,8 +246,40 @@ BEGIN
 	ELSE
 		is_estimated = true;
 	END IF;
-	
+
     RETURN NEXT;
 END;
 $BODY$
-LANGUAGE plpgsql VOLATILE;
+LANGUAGE plpgsql STABLE
+PARALLEL SAFE;
+
+/**
+ *  register code of requirerd js libs in gobalThis
+ *  select require( 'libmod1', 'libmod2', 'libmod3' )
+ *  select require(variadic array['libmod1','libmod2','libmod3'] )
+ */
+CREATE OR REPLACE FUNCTION require(VARIADIC modules text[])
+RETURNS void AS $body$
+  for (let i = 0; i < modules.length; i++) {
+    const name = modules[i];
+
+    if (!name || typeof name !== "string")
+      continue;
+
+    if (!globalThis[name]) {
+      plv8.elog(NOTICE, `Loading module: ${name}`);
+      try {
+        const libSqlName = 'libjs_' + name;
+        const res = plv8.execute(`SELECT ${libSqlName}()`);
+        globalThis[name] = res.length > 0 ? new Function("return " + res[0][libSqlName])()
+            : `Unable to load code for module: ${name}`;
+        plv8.elog(NOTICE, `Loaded module source: ${res[0][libSqlName].substring(0, 25)}`);
+      }
+      catch (err) {
+        plv8.elog(NOTICE, `Loading module ${name} failed: ` + err.message);
+      }
+    }
+  }
+$body$
+LANGUAGE plv8 IMMUTABLE
+PARALLEL UNSAFE;

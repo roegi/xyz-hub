@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,10 +24,12 @@ import static com.here.xyz.models.hub.Space.DEFAULT_VERSIONS_TO_KEEP;
 import static com.here.xyz.psql.DatabaseWriter.ModificationType.DELETE;
 import static com.here.xyz.psql.DatabaseWriter.ModificationType.INSERT;
 import static com.here.xyz.psql.DatabaseWriter.ModificationType.UPDATE;
-import static com.here.xyz.psql.query.XyzEventBasedQueryRunner.readTableFromEvent;
+import static com.here.xyz.psql.query.XyzEventBasedQueryRunner.readBranchTableFromEvent;
 import static com.here.xyz.responses.XyzError.NOT_IMPLEMENTED;
 
+import com.amazonaws.services.lambda.runtime.Context;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.google.common.collect.Iterables;
 import com.here.xyz.connectors.ErrorResponseException;
 import com.here.xyz.connectors.StorageConnector;
 import com.here.xyz.events.Event;
@@ -53,6 +55,7 @@ import com.here.xyz.util.db.datasource.DataSourceProvider;
 import com.here.xyz.util.db.datasource.DatabaseSettings;
 import com.here.xyz.util.db.datasource.DatabaseSettings.ScriptResourcePath;
 import com.here.xyz.util.runtime.FunctionRuntime;
+import com.here.xyz.util.runtime.LambdaFunctionRuntime;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -74,7 +77,6 @@ public abstract class DatabaseHandler extends StorageConnector {
     private static final List<ScriptResourcePath> SCRIPT_RESOURCE_PATHS = List.of(new ScriptResourcePath("/sql", "hub", "common"));
     public static final String ECPS_PHRASE = "ECPS_PHRASE";
     private static final Logger logger = LogManager.getLogger();
-    private static final String MAINTENANCE_ENDPOINT = "MAINTENANCE_SERVICE_ENDPOINT";
 
     /**
      * Lambda Execution Time = 25s. We are actively canceling queries after STATEMENT_TIMEOUT_SECONDS
@@ -84,11 +86,6 @@ public abstract class DatabaseHandler extends StorageConnector {
     static final int MIN_REMAINING_TIME_FOR_RETRY_SECONDS = 3;
 
     private static String INCLUDE_OLD_STATES = "includeOldStates"; // read from event params
-
-    /**
-     * The dbMaintainer for the current event.
-     */
-    public DatabaseMaintainer dbMaintainer;
 
     private boolean retryAttempted;
 
@@ -111,11 +108,27 @@ public abstract class DatabaseHandler extends StorageConnector {
             .withApplicationName(FunctionRuntime.getInstance().getApplicationName())
             .withScriptResourcePaths(SCRIPT_RESOURCE_PATHS);
 
-        dataSourceProvider = new CachedPooledDataSources(dbSettings);
-        retryAttempted = false;
-        dbMaintainer = new DatabaseMaintainer(dbSettings, connectorParams,
-            FunctionRuntime.getInstance().getEnvironmentVariable(MAINTENANCE_ENDPOINT));
-        DataSourceProvider.setDefaultProvider(dataSourceProvider);
+        initialize(dbSettings, null);
+    }
+
+    public void initialize(DatabaseSettings dbSettings, Context context) {
+        if(context != null) {
+            new LambdaFunctionRuntime(context, null);
+        }
+
+        if(dbSettings == null)
+            throw new NullPointerException("dbSettings cannot be null");
+
+        if(dataSourceProvider ==  null) {
+            if(dbSettings.getScriptResourcePaths() == null || dbSettings.getScriptResourcePaths().isEmpty()) {
+                dbSettings.setScriptResourcePaths(SCRIPT_RESOURCE_PATHS);
+            }
+
+            dataSourceProvider = new CachedPooledDataSources(dbSettings);
+            retryAttempted = false;
+            DataSourceProvider.setDefaultProvider(dataSourceProvider);
+            this.dbSettings = dbSettings;
+        }
     }
 
     protected <R, T extends com.here.xyz.psql.QueryRunner<?, R>> R run(T runner) throws SQLException, ErrorResponseException {
@@ -151,7 +164,7 @@ public abstract class DatabaseHandler extends StorageConnector {
                 return false;
             }
             if (!retryAttempted) {
-                logger.warn("{} Retry based on serverless scaling detected! RemainingTime: {} ", traceItem, remainingSeconds, e);
+                logger.warn("{} Retryable error detected! RemainingTime: {} ", traceItem, remainingSeconds, e);
                 return true;
             }
         }
@@ -246,11 +259,12 @@ public abstract class DatabaseHandler extends StorageConnector {
           /** Include Upserts */
           if (!upserts.isEmpty()) {
             List<String> upsertIds = upserts.stream().map(Feature::getId).filter(Objects::nonNull).collect(Collectors.toList());
-            List<String> existingIds = run(new FetchExistingIds(new FetchIdsInput(readTableFromEvent(event),
+            List<String> existingIds = run(new FetchExistingIds(new FetchIdsInput(readBranchTableFromEvent(event),
                 upsertIds)));
             upserts.forEach(f -> {
                 if (existingIds.contains(f.getId())) {
-                    f.getProperties().getXyzNamespace().withCreatedAt(0);
+                    //todo: check intension of setting createdAt to 0
+                    //f.getProperties().getXyzNamespace().withCreatedAt(0);
                     updates.add(f);
                 }
                 else {
@@ -263,8 +277,11 @@ public abstract class DatabaseHandler extends StorageConnector {
           version = run(new GetNextVersion<>(event));
         }
         catch (Exception e) {
-          if (!retryAttempted)
-            return executeModifyFeatures(event);
+          if (!retryAttempted) {
+              retryAttempted = true;
+              logger.warn("{} triggered retry.", traceItem, e);
+              return executeModifyFeatures(event);
+          }
           else
               throw e;
         }
@@ -306,13 +323,12 @@ public abstract class DatabaseHandler extends StorageConnector {
                 event.setFailed(fails);
 
                 if (retryCausedOnServerlessDB(e) && !retryAttempted) {
-                    retryAttempted = true;
-
                     if(!connection.isClosed())
                     { connection.setAutoCommit(previousAutoCommitState);
                       connection.close();
                     }
-
+                    retryAttempted = true;
+                    logger.warn("{} triggered retry.", traceItem, e);
                     return executeModifyFeatures(event);
                 }
 
@@ -352,6 +368,8 @@ public abstract class DatabaseHandler extends StorageConnector {
                         connection.close();
                     }
                     //Retry
+                    retryAttempted = true;
+                    logger.warn("{} triggered retry.", traceItem, e);
                     return executeModifyFeatures(event);
                 }
             }
@@ -398,7 +416,8 @@ public abstract class DatabaseHandler extends StorageConnector {
             }
 
             //Set the version in the elements being returned
-            collection.getFeatures().forEach(f -> f.getProperties().getXyzNamespace().setVersion(version));
+            collection.getFeatures().forEach(f -> f.getProperties().getXyzNamespace().setVersion(version
+                + (event.getNodeId() > 0 ? Iterables.getLast(event.getBranchPath()).getVersion() : 0)));
 
             return collection;
         }
@@ -408,7 +427,7 @@ public abstract class DatabaseHandler extends StorageConnector {
         return new SQLQuery("SELECT 1 FROM pg_catalog.pg_constraint "
             + "WHERE connamespace::regnamespace::text = #{schema} AND conname = #{constraintName}")
             .withNamedParameter("schema", getDatabaseSettings().getSchema())
-            .withNamedParameter("constraintName", readTableFromEvent(event) + "_unique")
+            .withNamedParameter("constraintName", readBranchTableFromEvent(event) + "_unique")
             .run(dataSourceProvider, rs -> rs.next());
     }
 
@@ -420,7 +439,9 @@ public abstract class DatabaseHandler extends StorageConnector {
             .withStreamId(event.getStreamId())
             .withParams(event.getParams())
             .withConnectorParams(event.getConnectorParams())
-            .withIds(idsToFetch);
+            .withIds(idsToFetch)
+            .withNodeId(event.getNodeId())
+            .withBranchPath(event.getBranchPath());
 
       try {
         return run(new GetFeaturesById(fetchEvent)).getFeatures();

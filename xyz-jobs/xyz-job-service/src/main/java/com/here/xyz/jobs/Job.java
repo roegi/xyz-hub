@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2025 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,15 +23,18 @@ import static com.fasterxml.jackson.annotation.JsonInclude.Include.NON_DEFAULT;
 import static com.here.xyz.jobs.RuntimeInfo.State.CANCELLED;
 import static com.here.xyz.jobs.RuntimeInfo.State.CANCELLING;
 import static com.here.xyz.jobs.RuntimeInfo.State.FAILED;
+import static com.here.xyz.jobs.RuntimeInfo.State.NONE;
 import static com.here.xyz.jobs.RuntimeInfo.State.NOT_READY;
 import static com.here.xyz.jobs.RuntimeInfo.State.PENDING;
 import static com.here.xyz.jobs.RuntimeInfo.State.RESUMING;
 import static com.here.xyz.jobs.RuntimeInfo.State.RUNNING;
 import static com.here.xyz.jobs.RuntimeInfo.State.SUBMITTED;
 import static com.here.xyz.jobs.RuntimeInfo.State.SUCCEEDED;
-import static com.here.xyz.jobs.steps.Step.InputSet.DEFAULT_INPUT_SET_NAME;
+import static com.here.xyz.jobs.steps.Step.InputSet.DEFAULT_SET_NAME;
 import static com.here.xyz.jobs.steps.inputs.Input.inputS3Prefix;
 import static com.here.xyz.jobs.steps.resources.Load.addLoads;
+import static com.here.xyz.jobs.steps.resources.ResourcesRegistry.fromStaticLoads;
+import static com.here.xyz.jobs.steps.resources.ResourcesRegistry.toStaticLoads;
 import static com.here.xyz.util.Random.randomAlpha;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
@@ -42,27 +45,35 @@ import com.fasterxml.jackson.annotation.JsonView;
 import com.here.xyz.XyzSerializable;
 import com.here.xyz.jobs.RuntimeInfo.State;
 import com.here.xyz.jobs.config.JobConfigClient;
+import com.here.xyz.jobs.config.JobConfigClient.FilteredValues;
 import com.here.xyz.jobs.datasets.DatasetDescription;
 import com.here.xyz.jobs.datasets.Files;
 import com.here.xyz.jobs.datasets.streams.DynamicStream;
 import com.here.xyz.jobs.processes.ProcessDescription;
-import com.here.xyz.jobs.steps.Config;
+import com.here.xyz.jobs.retriever.JobInputsRetriever;
+import com.here.xyz.jobs.retriever.JobOutputsRetriever;
+import com.here.xyz.jobs.service.JobService;
+import com.here.xyz.jobs.steps.GroupPayloads;
 import com.here.xyz.jobs.steps.JobCompiler;
+import com.here.xyz.jobs.steps.JobPayloads;
+import com.here.xyz.jobs.steps.SetPayloads;
 import com.here.xyz.jobs.steps.Step;
+import com.here.xyz.jobs.steps.Step.Visibility;
 import com.here.xyz.jobs.steps.StepGraph;
 import com.here.xyz.jobs.steps.execution.JobExecutor;
 import com.here.xyz.jobs.steps.inputs.Input;
 import com.here.xyz.jobs.steps.inputs.ModelBasedInput;
+import com.here.xyz.jobs.util.S3BatchOperations;
 import com.here.xyz.jobs.steps.inputs.UploadUrl;
+import com.here.xyz.jobs.steps.outputs.DownloadUrl;
 import com.here.xyz.jobs.steps.outputs.Output;
 import com.here.xyz.jobs.steps.resources.ExecutionResource;
 import com.here.xyz.jobs.steps.resources.Load;
-import com.here.xyz.models.hub.Space.Extension;
+import com.here.xyz.jobs.steps.resources.ResourcesRegistry.StaticLoad;
 import com.here.xyz.util.Async;
+import com.here.xyz.util.pagination.Page;
+import com.here.xyz.util.pagination.PagedDataRetriever;
 import com.here.xyz.util.service.Core;
-import com.here.xyz.util.web.HubWebClient;
-import com.here.xyz.util.web.XyzWebClient.ErrorResponseException;
-import com.here.xyz.util.web.XyzWebClient.WebClientException;
 import io.vertx.core.Future;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -71,6 +82,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -112,11 +125,15 @@ public class Job implements XyzSerializable {
   @JsonView({Public.class, Static.class})
   private JobClientInfo clientInfo;
   @JsonView(Static.class)
-  private String secondaryResourceKey;
+  private Set<String> resourceKeys;
+  @JsonView(Static.class)
+  private List<StaticLoad> calculatedResourceLoads;
+  @JsonView({Internal.class, Static.class})
+  private boolean reusable = true;
 
   private static final Async ASYNC = new Async(100, Job.class);
   private static final Logger logger = LogManager.getLogger();
-  private static final long DEFAULT_JOB_TTL = TimeUnit.DAYS.toMillis(2 * 7); //4 weeks
+  private static final long DEFAULT_JOB_TTL = TimeUnit.DAYS.toMillis(2 * 7); //2 weeks
 
   /**
    * Creates a new Job.
@@ -200,7 +217,33 @@ public class Job implements XyzSerializable {
    */
   protected Future<Void> prepare() {
     logger.info("[{}] Preparing job ...", getId());
-    return Future.all(Job.forEach(getSteps().stepStream().collect(Collectors.toList()), step -> prepareStep(step))).mapEmpty();
+    return Future.all(
+        Future.all(Job.forEach(getSteps().stepStream().collect(Collectors.toList()), step -> prepareStep(step))).mapEmpty(),
+        prepareDatasetDescriptions()
+    ).mapEmpty();
+  }
+
+  private Future<Void> prepareDatasetDescriptions() {
+    if (resourceKeys != null)
+      return Future.succeededFuture();
+
+    List<Future<Void>> preparations =  new ArrayList<>();
+
+    if (getSource() != null)
+      preparations.add(getSource().prepare());
+    if (getTarget() != null)
+      preparations.add(getTarget().prepare());
+
+    if (preparations.isEmpty())
+      return Future.succeededFuture();
+
+    return Future.all(preparations).map(v -> {
+      resourceKeys = Stream.concat(
+          getSource().getResourceKeys().stream(),
+          getTarget() != null ? getTarget().getResourceKeys().stream() : Stream.empty()
+      ).collect(Collectors.toSet());
+      return null;
+    });
   }
 
   private Future<Void> prepareStep(Step step) {
@@ -273,7 +316,7 @@ public class Job implements XyzSerializable {
             getStatus().setState(CANCELLED);
             return storeStatus(CANCELLING);
           }
-          return JobExecutor.getInstance().cancel(getExecutionId());
+          return JobExecutor.getInstance().cancel(getExecutionId(), "Cancelled as it was requested by the user");
         })
         /*
         NOTE: Cancellation is still in progress. The JobExecutor will now monitor the different step cancellations
@@ -305,15 +348,35 @@ public class Job implements XyzSerializable {
     if (existingStep == null)
       throw new IllegalArgumentException("The provided step with ID " + step.getGlobalStepId() + " was not found.");
 
-    return updateStep(step, existingStep.getStatus().getState(), true);
+    /*
+    NOTE: The following is a hotfix to prevent the system from overloading when there is an incoming burst of parallel step updates
+    for the same step.
+     */
+    //---------------------------
+    RuntimeInfo newStepStatus = step.getStatus();
+    RuntimeInfo existingStepStatus = existingStep.getStatus();
+    final long TIME_TOLERANCE = 5_000;
+
+    if (newStepStatus.getState() == existingStepStatus.getState()
+        && newStepStatus.getUpdatedAt() - TIME_TOLERANCE < existingStepStatus.getUpdatedAt())
+      return Future.succeededFuture();
+    //---------------------------
+
+    return updateStep(step, existingStepStatus.getState(), true);
   }
 
+  //NOTE: This method is currently only used to update a step by its ID from incoming events (e.g., from EMR) rather than using an incoming step payload
   public Future<Void> updateStepStatus(String stepId, RuntimeInfo status, boolean cancelOnFailure) {
     final Step step = getStepById(stepId);
     if (step == null)
       throw new IllegalArgumentException("The provided step with ID " + stepId + " was not found.");
 
     State existingStepState = step.getStatus().getState();
+
+    //NOTE: This is a workaround for incoming events which try to set a step directly to CANCELLED without going through CANCELLING
+    if (status.getState() == CANCELLED && !existingStepState.isValidSuccessor(status.getState())
+        && existingStepState.isValidSuccessor(CANCELLING))
+      step.getStatus().setState(CANCELLING);
 
     step.getStatus()
         .withState(status.getState())
@@ -325,6 +388,7 @@ public class Job implements XyzSerializable {
   }
 
   private Future<Void> updateStep(Step step, State previousStepState, boolean cancelOnFailure) {
+    State previousJobState = getStatus().getState();
     //TODO: Once the state was SUCCEEDED it should not be mutable at all anymore
     if (previousStepState != null && !step.getStatus().getState().isFinal() && previousStepState.isFinal())
       //In case the step was already marked to have a final state, ignore any subsequent non-final updates to it
@@ -348,6 +412,7 @@ public class Job implements XyzSerializable {
     int overallWorkUnits = getSteps().stepStream().mapToInt(s -> s.getEstimatedExecutionSeconds()).sum();
     getStatus().setEstimatedProgress((float) completedWorkUnits / (float) overallWorkUnits);
 
+    //Update the job's state if applicable
     if (previousStepState != FAILED && step.getStatus().getState() == FAILED) {
       getStatus()
           .withState(FAILED)
@@ -357,11 +422,15 @@ public class Job implements XyzSerializable {
     }
 
     return storeUpdatedStep(step)
-        .compose(v -> storeStatus(null))
-        .compose(v -> getStatus().getState() == FAILED && cancelOnFailure ? JobExecutor.getInstance().cancel(getExecutionId()).recover(t -> {
-          logger.error("[{}] Error cancelling the job execution. Was it already cancelled before?", getId(), t);
-          return Future.succeededFuture();
-        }) : Future.succeededFuture());
+        .compose(v -> storeStatus(previousJobState)) //TODO: Retry on IllegalStateTransitions after re-loading the status?
+        .compose(v -> getStatus().getState() == FAILED && cancelOnFailure ?
+            JobExecutor.getInstance().cancel(getExecutionId(), "Cancelled due to failed step \"" + step.getId() + "\"")
+                .recover(t -> {
+                  logger.error("[{}] Error cancelling the job execution. Was it already cancelled before?", getId(), t);
+                  return Future.succeededFuture();
+                })
+            : Future.succeededFuture()
+        );
   }
 
   private Future<Void> updatePreviousAttempts(Step step) {
@@ -376,6 +445,7 @@ public class Job implements XyzSerializable {
   public Future<Boolean> resume() {
     logger.info("[{}] Resuming job ...", getId());
     if (isResumable()) {
+      clearErrors();
       getStatus().setState(RESUMING);
       getSteps().stepStream().forEach(step -> {
         if (step.getStatus().getState().isValidSuccessor(RESUMING)) //NOTE: Steps with e.g. state SUCCEEDED must not be resumed
@@ -397,18 +467,32 @@ public class Job implements XyzSerializable {
       return Future.failedFuture(new IllegalStateException("Job " + getId() + " is not resumable."));
   }
 
+  /**
+   * Clears all runtime error fields on the global job status and all step statuses.
+   */
+  private void clearErrors() {
+    if (getStatus() != null)
+      getStatus().clearErrors();
+
+    if (getSteps() != null)
+      getSteps().stepStream().forEach(step -> {
+        if (step.getStatus() != null)
+          step.getStatus().clearErrors();
+      });
+  }
+
   public Future<Void> store() {
     //TODO: Validate changes on the job and make sure the job may be stored in the current state
     return JobConfigClient.getInstance().storeJob(this);
   }
 
   public Future<Void> storeStatus(State expectedPreviousState) {
-    logger.info("{}: Store Job-Status:{}", getId(), getStatus().getState());
+    logger.info("[{}] Store Job-Status: {}", getId(), getStatus().getState());
     return JobConfigClient.getInstance().updateStatus(this, expectedPreviousState);
   }
 
   public Future<Void> storeUpdatedStep(Step<?> step) {
-    logger.info("{} StoreUpdatedStep: {}", step.getGlobalStepId(), getStatus().getState());
+    logger.info("[{}] StoreUpdatedStep: {}", step.getGlobalStepId(), step.getStatus().getState());
     return JobConfigClient.getInstance().updateStep(this, step);
   }
 
@@ -423,12 +507,18 @@ public class Job implements XyzSerializable {
       return JobConfigClient.getInstance().loadJobs(resourceKey, state);
   }
 
-  public static Future<List<Job>> load(boolean newerThan, long  createdAt) {
-    return JobConfigClient.getInstance().loadJobs(newerThan, createdAt);
+  public static Future<List<Job>> load(FilteredValues<Long> newerThan, FilteredValues<Long> olderThan, FilteredValues<String> sourceType,
+      FilteredValues<String> targetType, FilteredValues<String> processType, FilteredValues<String> resourceKeys,
+      FilteredValues<State> stateTypes) {
+    return JobConfigClient.getInstance().loadJobs(newerThan, olderThan, sourceType, targetType, processType, resourceKeys, stateTypes);
   }
 
   public static Future<Set<Job>> loadByResourceKey(String resourceKey) {
-    return JobConfigClient.getInstance().loadJobs(resourceKey);
+    return JobConfigClient.getInstance().loadJobsByPrimaryResourceKey(resourceKey);
+  }
+
+  public static Future<Set<Job>> loadByResourceKey(String resourceKey, FilteredValues<State> states) {
+    return JobConfigClient.getInstance().loadJobsByPrimaryResourceKey(resourceKey, states);
   }
 
   public static Future<List<Job>> loadAll() {
@@ -450,20 +540,40 @@ public class Job implements XyzSerializable {
   E.g., when a job config was deleted due to a Dynamo TTL
    */
   public Future<Void> deleteJobResources() {
-    //Delete StateMachine if still existing
-    return JobExecutor.getInstance().deleteExecution(getExecutionId())
-        //Delete the inputs of this job
-        .compose(b -> deleteInputs())
-        //Delete the outputs of all involved steps
-        .compose(v -> Future.all(Job.forEach(getSteps().stepStream().collect(Collectors.toList()), step -> deleteStepOutputs(step)))
-            .mapEmpty());
+    return JobExecutor.getInstance()
+        //Delete StateMachine if still existing
+        .deleteExecution(getExecutionId())
+        //Schedule this job's S3 inputs/outputs for deletion via a single S3 Batch Operations job (tags them so the
+        //bucket's lifecycle rule removes them)
+        .compose(b -> scheduleResourcesForDeletion());
   }
 
-  private static Future<Boolean> deleteStepOutputs(Step step) {
+  private Future<Void> scheduleResourcesForDeletion() {
     return ASYNC.run(() -> {
-      step.deleteOutputs();
+      List<String> prefixes;
+      if (Input.hasInputReferences(getId()))
+        //Inputs are referenced by another job, delete only the output folders.
+        prefixes = getSteps().stepStream().map(Step::getOutputS3Prefix).toList();
+      else
+        //If nothing under the job is shared with another job delete the whole job folder in one batch job.
+        prefixes = List.of(getId() + "/");
+
+      List<String> batchJobIds = S3BatchOperations.scheduleForDeletion(getId(), prefixes);
+      if (!batchJobIds.isEmpty())
+        logger.info("[{}] Created S3 Batch Operations job(s) {} to schedule resources for deletion.", getId(), batchJobIds);
       return null;
     });
+  }
+
+
+  private List<StaticLoad> getCalculatedResourceLoads() {
+    if (getStatus() == null || getStatus().getState() == NONE || getStatus().getState() == NOT_READY)
+      return null;
+    return calculatedResourceLoads;
+  }
+
+  private void setCalculatedResourceLoads(List<StaticLoad> calculatedResourceLoads) {
+    this.calculatedResourceLoads = calculatedResourceLoads;
   }
 
   /**
@@ -474,10 +584,18 @@ public class Job implements XyzSerializable {
    * @return A list of overall resource-loads being reserved by this job
    */
   public Future<List<Load>> calculateResourceLoads() {
+    if (getCalculatedResourceLoads() != null)
+      return fromStaticLoads(getCalculatedResourceLoads());
     return calculateResourceLoads(getSteps())
-        .map(resourceLoads -> resourceLoads.entrySet().stream()
-            .map(e -> new Load().withResource(e.getKey()).withEstimatedVirtualUnits(e.getValue()))
-            .toList());
+        .map(resourceLoads -> {
+          List<Load> calculatedResourceLoads = resourceLoads.entrySet().stream()
+              .map(e -> new Load().withResource(e.getKey()).withEstimatedVirtualUnits(e.getValue()))
+              .toList();
+
+          setCalculatedResourceLoads(toStaticLoads(calculatedResourceLoads));
+
+          return calculatedResourceLoads;
+        });
   }
 
   private Future<Map<ExecutionResource, Double>> calculateResourceLoads(StepGraph graph) {
@@ -499,7 +617,7 @@ public class Job implements XyzSerializable {
   }
 
   public UploadUrl createUploadUrl(boolean compressed) {
-    return createUploadUrl(compressed, DEFAULT_INPUT_SET_NAME);
+    return createUploadUrl(compressed, DEFAULT_SET_NAME);
   }
 
   public UploadUrl createUploadUrl(boolean compressed, String setName) {
@@ -517,21 +635,138 @@ public class Job implements XyzSerializable {
     return JobExecutor.getInstance().sendInput(this, input);
   }
 
-  private Future<Void> deleteInputs() {
-    //TODO: Asyncify!
-    Input.deleteInputs(getId());
-    return Future.succeededFuture();
+  public Future<List<Input>> loadInputs(String setName) {
+    return ASYNC.run(() -> createInputsRetriever().getItems(new JobInputsRetriever.InputsParams().withSetName(setName)));
   }
 
-  public Future<List<Input>> loadInputs(String setName) {
-    return ASYNC.run(() -> Input.loadInputs(getId(), setName));
+  public Future<Page<Input>> loadInputs(String setName, String outputSetGroup, int limit, String nextPageToken) {
+    return ASYNC.run(
+        () -> createInputsRetriever().getPage(new JobInputsRetriever.InputsParams()
+                .withSetName(setName)
+                .withOutputSetGroup(outputSetGroup),
+            limit, nextPageToken));
   }
 
   public Future<List<Output>> loadOutputs() {
-    return ASYNC.run(() -> steps.stepStream()
-        .map(step -> (List<Output>) step.loadUserOutputs())
-        .flatMap(ol -> ol.stream())
+    return ASYNC.run(() -> createOutputsRetriever().getItems(new JobOutputsRetriever.OutputsParams()));
+  }
+
+  public Future<List<Output>> loadAllOutputs() {
+    return ASYNC.run(() -> getSteps().stepStream()
+        .map(step -> (List<Output>) step.loadOutputs())
+        .flatMap(List::stream)
         .collect(Collectors.toList()));
+  }
+
+  public Future<Page<Output>> loadOutputs(String setName, String outputSetGroup, int limit, String nextPageToken) {
+    JobOutputsRetriever.OutputsParams params = new JobOutputsRetriever.OutputsParams(outputSetGroup, setName);
+    return ASYNC.run(() -> createOutputsRetriever().getPage(params, limit, nextPageToken));
+  }
+
+  public Future<JobPayloads> composeInputsPreview() {
+    return ASYNC.run(() -> Input.previewInputs(this.id));
+  }
+
+  public Future<GroupPayloads> composeInputGroupPreview(String outputSetGroup) {
+    return ASYNC.run(() -> Input.previewInputGroups(this.id, outputSetGroup));
+  }
+
+  public Future<JobPayloads> composeOutputsPreview() {
+    return ASYNC.run(() -> {
+      final Map<String, GroupPayloads> groups = new HashMap<>();
+
+      final List<Step> stepsList = getSteps().stepStream().collect(Collectors.toList());
+
+      for (Step step : stepsList) {
+        String group = step.getOutputSetGroup();
+        GroupPayloads groupSummary = groups.computeIfAbsent(group, g -> new GroupPayloads()
+            .withSets(new HashMap<>())
+            .withItemCount(0));
+        for (Object osObj : step.getOutputSets()) {
+          Step.OutputSet os = (Step.OutputSet) osObj;
+          groupSummary.getSets().computeIfAbsent(os.name, s -> new SetPayloads()
+              .withItemCount(0)
+              .withByteSize(0));
+        }
+      }
+
+      for (Map.Entry<String, GroupPayloads> entry : groups.entrySet()) {
+        String group = entry.getKey();
+        GroupPayloads groupSummary = entry.getValue();
+        for (Map.Entry<String, SetPayloads> setEntry : groupSummary.getSets().entrySet()) {
+          String setName = setEntry.getKey();
+          AtomicLong itemCount = new AtomicLong();
+          AtomicLong byteSize = new AtomicLong();
+          stepsList.stream()
+              .filter(step -> group.equals(step.getOutputSetGroup()) && step.getOutputSetOrNull(setName) != null)
+              .forEach(step -> {
+                Page<?> page = step.loadOutputsPage(Visibility.USER, setName, Integer.MAX_VALUE, null);
+                itemCount.addAndGet(page.getItems().size());
+                for (Object item : page.getItems()) {
+                  if (item instanceof DownloadUrl) {
+                    byteSize.addAndGet(((DownloadUrl) item).getByteSize());
+                  }
+                }
+              });
+          setEntry.getValue().setItemCount(itemCount.get());
+          setEntry.getValue().setByteSize(byteSize.get());
+          groupSummary.setItemCount(groupSummary.getItemCount() + itemCount.get());
+          groupSummary.setByteSize(groupSummary.getByteSize() + setEntry.getValue().getByteSize());
+        }
+      }
+
+      long totalItems = groups.values().stream().mapToLong(GroupPayloads::getItemCount).sum();
+      long totalBytes = groups.values().stream().mapToLong(GroupPayloads::getByteSize).sum();
+
+      return new JobPayloads()
+          .withGroups(groups)
+          .withItemCount(totalItems)
+          .withByteSize(totalBytes);
+    });
+  }
+
+  public Future<GroupPayloads> composeOutputGroupPreview(String outputSetGroup) {
+    return ASYNC.run(() -> {
+      final Map<String, SetPayloads> sets = new HashMap<>();
+
+      final java.util.List<Step> stepsList = getSteps().stepStream().collect(java.util.stream.Collectors.toList());
+
+      for (Step step : stepsList) {
+        if (outputSetGroup.equals(step.getOutputSetGroup())) {
+          List<Step.OutputSet> outputSets = step.getOutputSets();
+          for (Step.OutputSet os : outputSets) {
+            sets.computeIfAbsent(os.name, s -> new SetPayloads()
+                .withItemCount(0)
+                .withByteSize(0));
+          }
+        }
+      }
+
+      for (java.util.Map.Entry<String, SetPayloads> entry : sets.entrySet()) {
+        String setName = entry.getKey();
+        long itemCount = stepsList.stream()
+            .filter(step -> outputSetGroup.equals(step.getOutputSetGroup()) && step.getOutputSetOrNull(setName) != null)
+            .mapToLong(step -> step.loadOutputsPage(Visibility.USER, setName, Integer.MAX_VALUE, null).getItems().size())
+            .sum();
+        entry.getValue().setItemCount(itemCount);
+      }
+
+      long totalItems = sets.values().stream().mapToLong(SetPayloads::getItemCount).sum();
+      long totalBytes = sets.values().stream().mapToLong(SetPayloads::getByteSize).sum();
+
+      return new GroupPayloads()
+          .withSets(sets)
+          .withItemCount(totalItems)
+          .withByteSize(totalBytes);
+    });
+  }
+
+  public PagedDataRetriever<Input, JobInputsRetriever.InputsParams> createInputsRetriever() {
+    return new JobInputsRetriever(getId());
+  }
+
+  public PagedDataRetriever<Output, JobOutputsRetriever.OutputsParams> createOutputsRetriever() {
+    return new JobOutputsRetriever(this);
   }
 
   @JsonView({Public.class})
@@ -559,6 +794,10 @@ public class Job implements XyzSerializable {
     return this;
   }
 
+  /**
+   * This getter mainly exists for auth / reporting purposes
+   * @return
+   */
   @JsonView(Static.class)
   public String getResourceKey() {
     //Always use key from the source except when the source is Files
@@ -567,29 +806,13 @@ public class Job implements XyzSerializable {
     return getSource() instanceof Files<?> ? getTarget().getKey() : getSource().getKey();
   }
 
-  public String getSecondaryResourceKey() {
-    if (secondaryResourceKey != null)
-      return secondaryResourceKey;
-
-    String key = getResourceKey();
-    if (key == null)
-      return null;
-
-    try {
-      Extension extension = HubWebClient.getInstance(Config.instance.HUB_ENDPOINT).loadSpace(key).getExtension();
-      if (extension != null)
-        secondaryResourceKey = extension.getSpaceId();
-    }
-    catch (WebClientException e) {
-      //Ignore if space is not present anymore
-      if (!(e instanceof ErrorResponseException errorResponseException && errorResponseException.getStatusCode() == 404))
-        throw new RuntimeException(e);
-    }
-    return secondaryResourceKey;
+  @JsonView(Static.class)
+  public Set<String> getResourceKeys() {
+    return resourceKeys;
   }
 
-  private void setSecondaryResourceKey(String secondaryResourceKey) {
-    this.secondaryResourceKey = secondaryResourceKey;
+  private void setResourceKeys(Set<String> resourceKeys) {
+    this.resourceKeys = resourceKeys;
   }
 
   public String getDescription() {
@@ -777,5 +1000,35 @@ public class Job implements XyzSerializable {
   @JsonIgnore
   public boolean isPipeline() {
     return getSource() instanceof DynamicStream;
+  }
+
+  public boolean isReusable() {
+    return reusable;
+  }
+
+  public void setReusable(boolean reusable) {
+    this.reusable = reusable;
+  }
+
+  public Job withReusable(boolean reusable) {
+    setReusable(reusable);
+    return this;
+  }
+
+  public void registerFinalizeObserver(Runnable finalizationObserver) {
+    JobService.registerJobFinalizeObserver(new Consumer<>() {
+      @Override
+      public void accept(Job job) {
+        try {
+          finalizationObserver.run();
+        }
+        catch (Exception e) {
+          logger.error("Error running finalization observer for job {}", job.id, e);
+        }
+        finally {
+          JobService.deregisterJobFinalizeObserver(this);
+        }
+      }
+    });
   }
 }

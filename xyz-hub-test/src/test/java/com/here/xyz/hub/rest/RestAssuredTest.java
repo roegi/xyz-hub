@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,25 +22,34 @@ package com.here.xyz.hub.rest;
 import static io.restassured.config.DecoderConfig.decoderConfig;
 import static io.restassured.config.EncoderConfig.encoderConfig;
 
+import com.here.xyz.hub.Config;
 import com.here.xyz.hub.auth.TestAuthenticator;
 import io.restassured.RestAssured;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 
 public class RestAssuredTest extends TestAuthenticator {
 
-    @BeforeClass
-    public static void configureRestAssured() {
-        RestAssured.baseURI = RestAssuredConfig.config().baseURI;
-        RestAssured.port = RestAssuredConfig.config().hubPort;
-        RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
-        RestAssured.config = RestAssured.config().httpClient(RestAssured.config().getHttpClientConfig().reuseHttpClientInstance());
-        RestAssured.config = RestAssured.config().encoderConfig(encoderConfig().defaultContentCharset("UTF-8"));
-        RestAssured.config = RestAssured.config().decoderConfig(decoderConfig().defaultContentCharset("UTF-8"));
-    }
+  static {
+    new Config();
+  }
 
-    @AfterClass
-    public static void unconfigureRestAssured() {
-        RestAssured.reset();
-    }
+  @BeforeAll
+  @BeforeClass
+  public static void configureRestAssured() {
+    RestAssured.baseURI = RestAssuredConfig.config().baseURI;
+    RestAssured.port = RestAssuredConfig.config().hubPort;
+    RestAssured.enableLoggingOfRequestAndResponseIfValidationFails();
+    RestAssured.config = RestAssured.config().httpClient(RestAssured.config().getHttpClientConfig().reuseHttpClientInstance());
+    RestAssured.config = RestAssured.config().encoderConfig(encoderConfig().defaultContentCharset("UTF-8"));
+    RestAssured.config = RestAssured.config().decoderConfig(decoderConfig().defaultContentCharset("UTF-8"));
+  }
+
+  @AfterAll
+  @AfterClass
+  public static void unconfigureRestAssured() {
+    RestAssured.reset();
+  }
 }

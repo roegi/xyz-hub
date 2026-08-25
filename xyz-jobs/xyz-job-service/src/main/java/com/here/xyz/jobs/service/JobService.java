@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ package com.here.xyz.jobs.service;
 import com.here.xyz.XyzSerializable;
 import com.here.xyz.jobs.Job;
 import com.here.xyz.jobs.config.JobConfigClient;
+import com.here.xyz.jobs.processes.Maintain;
 import com.here.xyz.jobs.steps.StepGraph;
 import com.here.xyz.jobs.steps.execution.CleanUpExecutor;
 import com.here.xyz.jobs.steps.execution.JobExecutor;
@@ -33,10 +34,10 @@ import com.here.xyz.util.web.HubWebClient;
 import io.vertx.core.DeploymentOptions;
 import io.vertx.core.Future;
 import io.vertx.core.VertxOptions;
+import io.vertx.core.impl.ConcurrentHashSet;
 import io.vertx.core.json.JsonObject;
-import java.util.ArrayList;
 import java.util.Date;
-import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.apache.commons.lang3.math.NumberUtils;
@@ -58,9 +59,12 @@ public class JobService extends Core {
     XyzSerializable.registerSubtypes(StepGraph.class);
     XyzSerializable.registerSubtypes(Input.class);
     XyzSerializable.registerSubtypes(Output.class);
+
+    //Maintenance process
+    XyzSerializable.registerSubtypes(Maintain.class);
   }
 
-  private static List<Consumer> jobFinalizationObservers = new ArrayList<>();
+  private static Set<Consumer> jobFinalizationObservers = new ConcurrentHashSet<>();
 
   public static void main(String[] args) {
     VertxOptions vertxOptions = new VertxOptions()
@@ -132,6 +136,10 @@ public class JobService extends Core {
 
   public static void registerJobFinalizeObserver(Consumer<Job> jobConsumer) {
     jobFinalizationObservers.add(jobConsumer);
+  }
+
+  public static void deregisterJobFinalizeObserver(Consumer<Job> jobConsumer) {
+    jobFinalizationObservers.remove(jobConsumer);
   }
 
   public static void callFinalizeObservers(Job job) {

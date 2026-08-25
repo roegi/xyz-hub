@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2025 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,9 +36,9 @@ import java.util.List;
 })
 public class DelegateStep extends Step<DelegateStep> {
   @JsonView({Internal.class, Static.class})
-  private final Step<?> delegate;
+  protected Step<?> delegate;
   @JsonIgnore
-  private final Step<?> delegator;
+  protected Step<?> delegator;
   private RuntimeInfo status = new RuntimeInfo();
 
   //Only needed for deserialization purposes
@@ -66,10 +66,14 @@ public class DelegateStep extends Step<DelegateStep> {
     NOTE: Only output-sets that are present on the compiled (new) step will be copied from the old one.
     The old step might contain further output-sets that won't be referenced.
      */
-    this.outputSets = outputSets != null ? outputSets : delegator.getOutputSets().stream().map(compiledOutputSet -> {
-      OutputSet delegateOutputSet = this.delegate.getOutputSets().stream().filter(outputSet -> outputSet.name.equals(compiledOutputSet.name)).findFirst().get();
+    setOutputSetGroup(delegator.getOutputSetGroup());
+    setOutputSets(outputSets != null ? outputSets : delegator.getOutputSets().stream().map(compiledOutputSet -> {
+      OutputSet delegateOutputSet = this.delegate.getOutputSets().stream().filter(outputSet -> outputSet.name.equals(compiledOutputSet.name)).findFirst().orElse(null);
+      //TODO: Remove this hotfix once the hotfix regarding FINALIZATION_MARKER in TaskedSpaceBasedStep is removed
+      if (delegateOutputSet == null)
+        return compiledOutputSet;
       return new OutputSet(delegateOutputSet, this.delegate.getJobId(), compiledOutputSet.visibility);
-    }).toList();
+    }).toList(), true);
   }
 
   private Step unwrapDelegate(DelegateStep delegate) {
@@ -140,11 +144,6 @@ public class DelegateStep extends Step<DelegateStep> {
   @Override
   public boolean validate() throws ValidationException {
     return true;
-  }
-
-  @Override
-  public void deleteOutputs() {
-    //TODO: Implement logic for checking the reference counter here?
   }
 
   @Override

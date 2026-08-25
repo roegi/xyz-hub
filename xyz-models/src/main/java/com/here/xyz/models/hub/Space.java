@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -156,7 +156,7 @@ public class Space {
    * This value will increase depending on the value having been defined for {@link #versionsToKeep}.
    */
   @JsonView({Internal.class, Static.class})
-  private long minVersion = 1;
+  private long minVersion = 0;
 
   /**
    * If false, auto-indexing gets disabled
@@ -240,6 +240,9 @@ public class Space {
   @JsonInclude(Include.NON_DEFAULT)
   @JsonView({Public.class, Static.class})
   private long contentUpdatedAt = 0;
+
+  @JsonView({Public.class, Static.class})
+  private String mimeType;
 
   public String getId() {
     return id;
@@ -592,6 +595,19 @@ public class Space {
 
   public Space withContentUpdatedAt(long contentUpdatedAt) {
     setContentUpdatedAt(contentUpdatedAt);
+    return this;
+  }
+
+  public String getMimeType() {
+    return mimeType;
+  }
+
+  public void setMimeType(String mimeType) {
+    this.mimeType = mimeType;
+  }
+
+  public Space withMimeType(String mimeType) {
+    setMimeType(mimeType);
     return this;
   }
 

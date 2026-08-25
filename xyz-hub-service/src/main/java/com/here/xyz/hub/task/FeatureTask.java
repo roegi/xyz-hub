@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,9 @@
 
 package com.here.xyz.hub.task;
 
+import static com.here.xyz.events.ContextAwareEvent.SpaceContext.EXTENSION;
+import static com.here.xyz.events.ContextAwareEvent.SpaceContext.SUPER;
+import static com.here.xyz.models.hub.Space.TABLE_NAME;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_GATEWAY;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR;
@@ -27,6 +30,7 @@ import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
+import com.here.xyz.events.ContextAwareEvent;
 import com.here.xyz.events.ContextAwareEvent.SpaceContext;
 import com.here.xyz.events.Event;
 import com.here.xyz.events.GetFeaturesByBBoxEvent;
@@ -44,6 +48,8 @@ import com.here.xyz.events.SearchForFeaturesEvent;
 import com.here.xyz.hub.Service;
 import com.here.xyz.hub.auth.Authorization;
 import com.here.xyz.hub.auth.FeatureAuthorization;
+import com.here.xyz.hub.config.BranchConfigClient;
+import com.here.xyz.hub.config.TagConfigClient;
 import com.here.xyz.hub.connectors.RpcClient;
 import com.here.xyz.hub.connectors.models.Connector;
 import com.here.xyz.hub.connectors.models.Space;
@@ -58,17 +64,23 @@ import com.here.xyz.hub.task.TaskPipeline.Callback;
 import com.here.xyz.models.geojson.implementation.Feature;
 import com.here.xyz.models.geojson.implementation.FeatureCollection;
 import com.here.xyz.models.geojson.implementation.Geometry;
+import com.here.xyz.models.hub.Branch;
 import com.here.xyz.models.hub.FeatureModificationList.ConflictResolution;
 import com.here.xyz.models.hub.FeatureModificationList.IfExists;
 import com.here.xyz.models.hub.FeatureModificationList.IfNotExists;
+import com.here.xyz.models.hub.Ref;
+import com.here.xyz.psql.query.XyzEventBasedQueryRunner;
+import com.here.xyz.psql.query.branching.BranchManager;
 import com.here.xyz.responses.XyzResponse;
 import com.here.xyz.util.geo.GeometryValidator;
 import com.here.xyz.util.service.HttpException;
 import io.vertx.core.AsyncResult;
+import io.vertx.core.Future;
 import io.vertx.ext.web.RoutingContext;
 import java.nio.charset.Charset;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import org.apache.logging.log4j.LogManager;
@@ -134,6 +146,71 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
       event.setSpace(context.pathParam(ApiParam.Path.SPACE_ID));
     }
     this.requestBodySize = requestBodySize;
+  }
+
+  void resolveVersionRef(final X task, final Callback<X> callback) {
+    try {
+      if (task.getEvent() instanceof ContextAwareEvent<?> event) {
+        Future<Void> future = Future.succeededFuture();
+        if (event.getRef().isTag()) {
+          future = TagConfigClient.getInstance().getTag(task.getMarker(), event.getRef().getTag(), task.space.getId())
+              .compose(tag -> {
+                if (tag == null) {
+                  //It could be a branch
+                  event.setRef(Ref.fromBranchId(event.getRef().getTag()));
+                } else {
+                  event.setRef(tag.getVersionRef());
+                }
+                return Future.succeededFuture();
+              });
+        }
+        future.compose(v -> resolveBranchFor(event, task.space))
+              .onFailure(callback::exception)
+              .onSuccess(v -> callback.call(task));
+      } else
+        callback.call(task);
+    } catch (Exception e) {
+      callback.exception(new HttpException(INTERNAL_SERVER_ERROR, "Unable to load the resource definition.", e));
+    }
+  }
+
+  public static Future<Void> resolveBranchFor(ContextAwareEvent<?> event, Space space) {
+    if (event.getRef() == null || event.getRef().isMainBranch())
+      return Future.succeededFuture();
+
+    return getReferencedBranch(space.getId(), event.getRef())
+        .compose(referencedBranch -> {
+          if (referencedBranch != null) {
+            LinkedList<Ref> branchPath = new LinkedList<>(referencedBranch.getBranchPath());
+            event.withNodeId(referencedBranch.getNodeId())
+                .withBranchPath(branchPath);
+
+            //TODO: Remove this hack when SpaceContext support is removed from branching
+            if (event.getContext() == SUPER)  {
+              Ref lastRef = branchPath.removeLast();
+              long baseVersion = lastRef.getVersion();
+              Ref requestedRef = event.getRef();
+              if (requestedRef.isHead() || requestedRef.getVersion() > baseVersion)
+                event.setRef(new Ref(baseVersion));
+              event.setNodeId(BranchManager.getNodeId(lastRef));
+            }
+            else if (event.getContext() == EXTENSION) {
+              event.setConnectorParams(Map.copyOf(space.getResolvedStorageConnector().params));
+              event.getParams().put(TABLE_NAME, XyzEventBasedQueryRunner.readBranchTableFromEvent(event));
+              event.setNodeId(0);
+            }
+          }
+          return Future.succeededFuture();
+    });
+  }
+
+  public static Future<Branch> getReferencedBranch(String spaceId, Ref ref) {
+    return BranchConfigClient.getInstance().load(spaceId, ref.getBranch())
+        .compose(branch -> {
+          if (branch == null)
+            return Future.failedFuture(new HttpException(NOT_FOUND, "Tag or Branch \"" + ref.getBranch() + "\" was not found on resource \"" + spaceId + "\"."));
+          return Future.succeededFuture(branch);
+        });
   }
 
   public CacheProfile getCacheProfile() {
@@ -229,7 +306,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     }
   }
 
-  abstract static class ReadQuery<T extends com.here.xyz.events.SearchForFeaturesEvent<?>, X extends FeatureTask<T, ?>> extends FeatureTask<T, X> {
+  abstract static class ReadQuery<T extends SearchForFeaturesEvent<?>, X extends FeatureTask<T, ?>> extends FeatureTask<T, X> {
 
     private ReadQuery(T event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
@@ -262,7 +339,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<GeometryQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(this::resolveVersionRef)
           .then(this::resolveRefSpace)
           .then(this::resolveRefConnector)
           .then(Authorization::authorizeComposite)
@@ -392,7 +469,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<BBoxQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(this::resolveVersionRef)
           .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::checkImmutability)
@@ -422,7 +499,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<TileQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(this::resolveVersionRef)
           .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::checkImmutability)
@@ -457,7 +534,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<IdsQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(this::resolveVersionRef)
           .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::checkImmutability)
@@ -468,7 +545,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     }
   }
 
-  public static class IterateQuery extends ReadQuery<IterateFeaturesEvent, IterateQuery> {
+  public static class IterateQuery extends ReadQuery<IterateFeaturesEvent<IterateFeaturesEvent>, IterateQuery> {
 
     public IterateQuery(IterateFeaturesEvent event, RoutingContext context, ApiResponseType apiResponseTypeType, boolean skipCache) {
       super(event, context, apiResponseTypeType, skipCache);
@@ -478,7 +555,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<IterateQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(this::resolveVersionRef)
           .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::checkImmutability)
@@ -499,7 +576,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<SearchQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
-          .then(FeatureTaskHandler::resolveVersionRef)
+          .then(this::resolveVersionRef)
           .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::checkImmutability)
@@ -524,6 +601,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
           .then(FeatureTaskHandler::resolveSpace)
           .then(Authorization::authorizeComposite)
           .then(FeatureAuthorization::authorize)
+          .then(this::resolveVersionRef)
           .then(FeatureTaskHandler::readCache)
           .then(FeatureTaskHandler::invoke)
           .then(FeatureTaskHandler::convertResponse)
@@ -552,6 +630,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
     public TaskPipeline<ModifySpaceQuery> createPipeline() {
       return TaskPipeline.create(this)
           .then(FeatureTaskHandler::resolveSpace)
+          .then(this::resolveVersionRef)
           .then(SpaceTaskHandler::invokeConditionally);
     }
   }
@@ -611,6 +690,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
           .then(FeatureTaskHandler::resolveSpace)
           .then(FeatureTaskHandler::registerRequestMemory)
           .then(FeatureTaskHandler::throttle)
+          .then(this::resolveVersionRef)
           .then(FeatureTaskHandler::injectSpaceParams)
           .then(FeatureTaskHandler::checkPreconditions)
           .then(FeatureTaskHandler::prepareModifyFeatureOp)
@@ -623,6 +703,7 @@ public abstract class FeatureTask<T extends Event<?>, X extends FeatureTask<T, ?
           .then(FeatureAuthorization::authorize)
           .then(FeatureTaskHandler::enforceUsageQuotas)
           .then(FeatureTaskHandler::extractUnmodifiedFeatures)
+          .then(FeatureTaskHandler::injectMinVersion)
           .then(this::cleanup)
           .then(FeatureTaskHandler::invoke);
     }

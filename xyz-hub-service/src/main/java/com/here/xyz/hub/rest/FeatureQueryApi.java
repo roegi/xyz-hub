@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,8 @@ import com.here.xyz.events.IterateFeaturesEvent;
 import com.here.xyz.events.PropertiesQuery;
 import com.here.xyz.events.SearchForFeaturesEvent;
 import com.here.xyz.hub.Service;
+import com.here.xyz.hub.connectors.RpcClient;
+import com.here.xyz.hub.connectors.models.Space;
 import com.here.xyz.hub.rest.ApiParam.Path;
 import com.here.xyz.hub.rest.ApiParam.Query;
 import com.here.xyz.hub.task.FeatureTask;
@@ -50,21 +52,30 @@ import com.here.xyz.hub.task.FeatureTask.GetStatistics;
 import com.here.xyz.hub.task.FeatureTask.IterateQuery;
 import com.here.xyz.hub.task.FeatureTask.SearchQuery;
 import com.here.xyz.hub.task.FeatureTask.TileQuery;
-import com.here.xyz.util.geo.GeoTools;
 import com.here.xyz.models.geojson.HQuad;
 import com.here.xyz.models.geojson.WebMercatorTile;
 import com.here.xyz.models.geojson.coordinates.BBox;
 import com.here.xyz.models.geojson.exceptions.InvalidGeometryException;
 import com.here.xyz.models.geojson.implementation.Geometry;
 import com.here.xyz.models.hub.Ref;
+import com.here.xyz.responses.StatisticsResponse;
+import com.here.xyz.responses.XyzResponse;
+import com.here.xyz.util.geo.GeoTools;
 import com.here.xyz.util.geo.GeometryValidator;
 import com.here.xyz.util.service.HttpException;
+import io.vertx.core.Future;
+import io.vertx.core.Promise;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.ext.web.ParsedHeaderValue;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.router.RouterBuilder;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.apache.logging.log4j.Marker;
 
 public class FeatureQueryApi extends SpaceBasedApi {
 
@@ -84,6 +95,7 @@ public class FeatureQueryApi extends SpaceBasedApi {
   private void getStatistics(final RoutingContext context) {
     try {
       new GetStatistics(new GetStatisticsEvent()
+                .withRef(getRef(context))
                 .withContext(getSpaceContext(context))
                 .withFastMode(Query.getBoolean(context, FAST_MODE, false)),
               context,
@@ -91,6 +103,44 @@ public class FeatureQueryApi extends SpaceBasedApi {
       ).execute(this::sendResponse, this::sendErrorResponse);
     } catch (HttpException e) {
       sendErrorResponse(context, e);
+    }
+  }
+
+  //TODO: Add caching
+  public static Future<StatisticsResponse> getStatistics(Marker marker, String spaceId, SpaceContext context, Ref ref,
+      boolean fastMode, boolean skipCache) {
+    try {
+      Promise<XyzResponse> promise = Promise.promise();
+
+      GetStatisticsEvent statisticsEvent = new GetStatisticsEvent()
+          .withContext(context)
+          .withFastMode(fastMode)
+          .withSpace(spaceId)
+          .withRef(ref)
+          .withStreamId(marker.getName());
+
+      Space.resolveSpace(marker, spaceId)
+          .compose(space -> space.resolveStorage(marker)
+              .compose(connector -> {
+                Map<String, Object> params = new HashMap<>();
+                params.putAll(Optional.ofNullable(space.getStorage().getParams()).orElse(Collections.emptyMap()));
+                statisticsEvent.setParams(params);
+                return FeatureTask.resolveBranchFor(statisticsEvent, space).map(connector);
+              }))
+          .compose(connector -> {
+            RpcClient.getInstanceFor(connector)
+                .execute(marker, statisticsEvent, promise);
+            return Future.succeededFuture();
+          })
+          .onFailure(t -> promise.fail(t));
+
+      return promise.future()
+          .onFailure(t -> logger.error(t))
+          .map(response -> (StatisticsResponse) response);
+
+    }
+    catch (Exception e) {
+      return Future.failedFuture(e);
     }
   }
 
@@ -108,11 +158,11 @@ public class FeatureQueryApi extends SpaceBasedApi {
       final SearchForFeaturesEvent event = new SearchForFeaturesEvent();
       event.withPropertiesQuery(propertiesQuery)
           .withLimit(getLimit(context))
-          .withRef(getRef(context))
           .withForce2D(force2D)
           .withSelection(Query.getSelection(context))
           .withContext(spaceContext)
-          .withAuthor(author);
+          .withAuthor(author)
+          .withRef(getRef(context));
 
       final SearchQuery task = new SearchQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
       task.execute(this::sendResponse, this::sendErrorResponse);
@@ -138,44 +188,20 @@ public class FeatureQueryApi extends SpaceBasedApi {
       final boolean skipCache = Query.getBoolean(context, SKIP_CACHE, false);
       final boolean force2D = Query.getBoolean(context, FORCE_2D, false);
       final SpaceContext spaceContext = getSpaceContext(context);
-      final Integer v = Query.getInteger(context, Query.VERSION, null);
       final Ref ref = getRef(context);
 
-      List<String> sort = Query.getSort(context);
-      PropertiesQuery propertiesQuery = Query.getPropertiesQuery(context);
-      String handle = Query.getString(context, Query.HANDLE, null);
-      Integer[] part = Query.getPart(context);
-
-      //TODO: Streamline the following IterateFeaturesEvent creation
-      if (sort != null || propertiesQuery != null || part != null || ( handle != null && handle.startsWith("h07~"))) {
-        IterateFeaturesEvent event = new IterateFeaturesEvent();
-        event.withLimit(getLimit(context))
-            .withForce2D(force2D)
-            .withSelection(Query.getSelection(context))
-            .withSort(sort)
-            .withPart(part)
-            .withHandle(handle)
-            .withContext(spaceContext)
-            .withRef(ref)
-            .withV(v);
-
-        final SearchQuery task = new SearchQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
-        task.execute(this::sendResponse, this::sendErrorResponse);
-        return;
-      }
-
-      IterateFeaturesEvent event = new IterateFeaturesEvent()
+      IterateFeaturesEvent event = (IterateFeaturesEvent) new IterateFeaturesEvent()
+          .withNextPageToken(Query.getString(context, Query.HANDLE, null)) //TODO: Rename query param to nextPageToken!
           .withLimit(getLimit(context))
           .withForce2D(force2D)
           .withSelection(Query.getSelection(context))
           .withRef(ref)
-          .withV(v)
-          .withHandle(Query.getString(context, Query.HANDLE, null))
           .withContext(spaceContext);
 
       final IterateQuery task = new IterateQuery(event, context, ApiResponseType.FEATURE_COLLECTION, skipCache);
       task.execute(this::sendResponse, this::sendErrorResponse);
-    } catch (HttpException e) {
+    }
+    catch (HttpException e) {
       sendErrorResponse(context, e);
     }
   }
@@ -347,7 +373,7 @@ public class FeatureQueryApi extends SpaceBasedApi {
          case "tms"     : tileAddress = WebMercatorTile.forTMS(tileId); break;
          case "web"     : tileAddress = WebMercatorTile.forWeb(tileId); break;
          case "quadkey" : tileAddress = WebMercatorTile.forQuadkey(tileId); break;
-         case "here" : 
+         case "here" :
           if (tileId.contains("_")) {
             String[] levelRowColumnArray = tileId.split("_");
             if (levelRowColumnArray.length == 3) {
@@ -362,7 +388,7 @@ public class FeatureQueryApi extends SpaceBasedApi {
             hereTileAddress = new HQuad(tileId, Service.configuration.USE_BASE_4_H_TILES);
           }
           break;
-         
+
          default:
           throw new HttpException(BAD_REQUEST, String.format("Invalid path argument {type} of tile request '%s' != [tms,web,quadkey,here]",tileType));
         }
@@ -380,7 +406,7 @@ public class FeatureQueryApi extends SpaceBasedApi {
           event.setX(hereTileAddress.x);
           event.setY(hereTileAddress.y);
           event.setQuadkey(hereTileAddress.quadkey);
-        } 
+        }
         else
          throw new IllegalArgumentException();
 

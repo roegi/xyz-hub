@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 package com.here.xyz.util.service;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.net.URI;
 import java.util.Arrays;
 import java.util.List;
 
@@ -95,6 +96,23 @@ public class BaseConfig {
   public String AWS_REGION;
 
   /**
+   * The localstack endpoint to use it for all AWS clients when running locally
+   *
+   * NOTE: This config variable may only be set when running locally, because the system uses it as an indicator
+   *  to determine whether it's running locally or on AWS.
+   */
+  public URI LOCALSTACK_ENDPOINT;
+
+  /**
+   * A comma separated list of AWS regions from which to not allow reading data (e.g. for import)
+   */
+  public String FORBIDDEN_SOURCE_REGIONS;
+
+  public List<String> forbiddenSourceRegions() {
+    return fromCommaSeparatedList(FORBIDDEN_SOURCE_REGIONS);
+  }
+
+  /**
    * When set, modifies the Stream-Info header name to the value specified.
    */
   public String CUSTOM_STREAM_INFO_HEADER_NAME;
@@ -108,6 +126,11 @@ public class BaseConfig {
    * Additional application name variable.
    */
   public String APP_NAME;
+
+  /**
+   * The default cache TTL (in seconds) to be used by the {@link com.here.xyz.util.web.HubWebClient} to cache responses in memory.
+   */
+  public long HUB_WEB_CLIENT_CACHE_TTL = 30;
 
   /**
    * Helper method to split a string that is a comma separated list into a list of strings including

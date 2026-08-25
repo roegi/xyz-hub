@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2023 HERE Europe B.V.
+ * Copyright (C) 2017-2025 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,19 +19,28 @@
 
 package com.here.xyz.hub.rest;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import static com.here.xyz.hub.auth.TestAuthenticator.AuthProfile.ACCESS_ALL;
-import com.here.xyz.models.geojson.coordinates.PointCoordinates;
-import com.here.xyz.models.geojson.implementation.Feature;
-import com.here.xyz.models.geojson.implementation.FeatureCollection;
-import com.here.xyz.models.geojson.implementation.Point;
-import com.here.xyz.models.geojson.implementation.Properties;
 import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_GEO_JSON;
 import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_JSON;
 import static com.here.xyz.util.service.BaseHttpServerVerticle.HeaderValues.APPLICATION_VND_HERE_FEATURE_MODIFICATION_LIST;
 import static io.netty.handler.codec.http.HttpResponseStatus.NO_CONTENT;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.isIn;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThat;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.here.xyz.events.ContextAwareEvent.SpaceContext;
+import com.here.xyz.models.geojson.coordinates.PointCoordinates;
+import com.here.xyz.models.geojson.implementation.Feature;
+import com.here.xyz.models.geojson.implementation.FeatureCollection;
+import com.here.xyz.models.geojson.implementation.Point;
+import com.here.xyz.models.geojson.implementation.Properties;
+import com.here.xyz.models.hub.FeatureModificationList.IfExists;
+import io.netty.handler.codec.http.HttpResponseStatus;
 import io.restassured.response.ValidatableResponse;
 import io.vertx.core.json.JsonObject;
 import java.util.ArrayList;
@@ -47,20 +56,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.commons.lang3.RandomStringUtils;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.everyItem;
-import static org.hamcrest.Matchers.isIn;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertThat;
 
 public class TestSpaceWithFeature extends TestWithSpaceCleanup {
+
+  protected static final String DEFAULT_SPACE_ID = "x-psql-test";
   protected static String embeddedStorageId = "psql";
   protected static String httpStorageId = "psql-http";
 
   protected static String usedStorageId = embeddedStorageId;
 
   protected static void remove() {
-    TestWithSpaceCleanup.removeSpace("x-psql-test");
+    remove(DEFAULT_SPACE_ID);
+  }
+
+  protected static void remove(String spaceId) {
+   TestWithSpaceCleanup.removeSpace(spaceId);
   }
 
   public static ValidatableResponse createSpace(String content) {
@@ -109,7 +119,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
    * @return the random ID
    */
   protected static String createSpaceWithRandomId() {
-    return createSpaceWithId(UUID.randomUUID().toString());
+    return createSpaceWithId(UUID.randomUUID().toString().substring(0,13));
   }
 
   protected static String createSpaceWithId(String spaceId) {
@@ -170,7 +180,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         .path("id");
   }
 
-  public void createSpaceWithVersionsToKeep(String spaceId, int versionsToKeep) {
+  public void createSpaceWithVersionsToKeep(String spaceId, long versionsToKeep) {
     given()
         .contentType(APPLICATION_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_ALL))
@@ -179,6 +189,10 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         .post(getCreateSpacePath())
         .then()
         .statusCode(OK.code());
+  }
+
+  protected void createSpace(String spaceId, boolean historyActive) {
+    createSpaceWithVersionsToKeep(spaceId, historyActive ? 1000 : 1);
   }
 
   protected static void addFeature(String spaceId, Feature f) {
@@ -195,7 +209,7 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
   }
 
   protected static void addFeatures() {
-    addFeatures("x-psql-test");
+    addFeatures(DEFAULT_SPACE_ID);
   }
 
   protected static void addFeatures(String toSpace) {
@@ -311,15 +325,19 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         .body("id", equalTo(spaceId));
   }
 
-  protected void countFeatures(int expected) {
+  protected void countFeatures(String spaceId, int expected) {
     given().
         accept(APPLICATION_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
         .when()
-        .get(getSpacesPath() + "/x-psql-test/statistics")
+        .get(getSpacesPath() + "/"+ spaceId +"/statistics")
         .then()
         .statusCode(OK.code())
         .body("count.value", equalTo(expected),"count.estimated", equalTo(false));
+  }
+
+  protected void countFeatures(int expected) {
+    countFeatures(DEFAULT_SPACE_ID,expected);
   }
 
   @SuppressWarnings("SameParameterValue")
@@ -464,15 +482,48 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
   }
 
   public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection) {
-    given()
+    postFeature(spaceId, feature, authProfile, versionConflictDetection, null, null, OK);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection,
+      HttpResponseStatus expectedResponseStatus) {
+    postFeature(spaceId, feature, authProfile, versionConflictDetection, null, null, expectedResponseStatus);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection,
+      SpaceContext context) {
+    postFeature(spaceId, feature, authProfile, versionConflictDetection, context, null, OK);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection,
+      IfExists ifExists) {
+    postFeature(spaceId, feature, authProfile, versionConflictDetection, null, ifExists, OK);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection,
+      IfExists ifExists, HttpResponseStatus expectedResponseStatus) {
+    postFeature(spaceId, feature, authProfile, versionConflictDetection, null, ifExists, expectedResponseStatus);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection,
+      SpaceContext context, HttpResponseStatus expectedResponseStatus) {
+    postFeature(spaceId, feature, authProfile, versionConflictDetection, context, null, expectedResponseStatus);
+  }
+
+  public static void postFeature(String spaceId, Feature feature, AuthProfile authProfile, boolean versionConflictDetection,
+      SpaceContext context, IfExists ifExists, HttpResponseStatus expectedResponseStatus) {
+    ValidatableResponse resp = given()
         .contentType(APPLICATION_GEO_JSON)
         .headers(getAuthHeaders(authProfile))
         .body(feature.serialize())
         .when()
-        .post("/spaces/" + spaceId + "/features?conflictDetection=" + versionConflictDetection)
+        .post("/spaces/" + spaceId + "/features?conflictDetection=" + versionConflictDetection
+            + (context != null ? "&context=" + context.name() : "")
+            + (ifExists != null ? "&e=" + ifExists.name() : ""))
         .then()
-        .statusCode(OK.code())
-        .body("features[0].id", equalTo(feature.getId()));
+        .statusCode(expectedResponseStatus.code());
+    if (expectedResponseStatus == OK)
+      resp.body("features[0].id", equalTo(feature.getId()));
   }
 
   public static Feature newFeature() {
@@ -490,11 +541,11 @@ public class TestSpaceWithFeature extends TestWithSpaceCleanup {
         .post(getSpacesPath() + "/"+ spaceId +"/features");
   }
 
-  protected static void makeComposite(String spaceId, String newExtendingId) {
+  protected static void makeComposite(String spaceId, String extendedSpaceId) {
     given()
         .contentType(APPLICATION_JSON)
         .headers(getAuthHeaders(AuthProfile.ACCESS_OWNER_1_ADMIN))
-        .body("{\"extends\":{\"spaceId\":\"" + newExtendingId + "\"}}")
+        .body(new JsonObject().put("extends", new JsonObject().put("spaceId", extendedSpaceId)).toString())
         .when()
         .patch("/spaces/" + spaceId)
         .then()

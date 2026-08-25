@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import static com.here.xyz.util.db.SQLQuery.XyzSqlErrors.XYZ_FAILED_ATTEMPT;
 import static com.here.xyz.util.db.pg.LockHelper.advisoryLock;
 import static com.here.xyz.util.db.pg.LockHelper.advisoryUnlock;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.here.xyz.XyzSerializable;
@@ -39,10 +40,12 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.regex.Matcher;
@@ -52,6 +55,7 @@ import javax.sql.DataSource;
 import org.apache.commons.dbutils.QueryRunner;
 import org.apache.commons.dbutils.ResultSetHandler;
 import org.apache.commons.dbutils.StatementConfiguration;
+import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -61,6 +65,15 @@ import org.apache.logging.log4j.Logger;
 @JsonInclude(NON_DEFAULT)
 public class SQLQuery {
   private static final Logger logger = LogManager.getLogger();
+  private static final Level QUERY_LEVEL = Level.forName("QUERY", 60);
+  /**
+   * Base delay for the exponential backoff performed between query retries.
+   * The first retry (i.e. the 2nd execution attempt) is always performed immediately without any delay to keep the
+   * previous behavior backwards compatible. Every following retry waits {@code RETRY_BACKOFF_BASE_MS * 2^n} milliseconds,
+   * capped at {@link #RETRY_BACKOFF_MAX_MS}.
+   */
+  private static final long RETRY_BACKOFF_BASE_MS = 1_000;
+  private static final long RETRY_BACKOFF_MAX_MS = 300_000;
   private static final String VAR_PREFIX = "\\$\\{";
   private static final String VAR_SUFFIX = "\\}";
   private static final String FRAGMENT_PREFIX = "${{";
@@ -78,6 +91,7 @@ public class SQLQuery {
   private String lock;
   private int timeout = Integer.MAX_VALUE;
   private int maximumRetries;
+  private Set<String> retryableErrorCodes = Set.of();
   private HashMap<String, List<Integer>> namedParams2Positions = new HashMap<>();
   private PreparedStatement preparedStatement;
   private String queryId;
@@ -363,7 +377,16 @@ public class SQLQuery {
       setQueryId(UUID.randomUUID().toString());
   }
 
-  public PreparedStatement prepareStatement(Connection connection) throws SQLException {
+  /**
+   * Returns the prepared statement of this SQLQuery.
+   * If none is existing yet, it will be created and re-used for
+   * later calls of this method.
+   * @param connection
+   * @return
+   * @throws SQLException
+   */
+  @JsonIgnore
+  public PreparedStatement getPreparedStatement(Connection connection) throws SQLException {
     Map<String, Object> namedParameters = this.namedParameters;
     if (preparedStatement == null)
       preparedStatement = connection.prepareStatement(substitute().text());
@@ -739,6 +762,19 @@ public class SQLQuery {
     return this;
   }
 
+  public Set<String> getRetryableErrorCodes() {
+    return retryableErrorCodes;
+  }
+
+  public void setRetryableErrorCodes(Set<String> retryableErrorCodes) {
+    this.retryableErrorCodes = retryableErrorCodes;
+  }
+
+  public SQLQuery withRetryableErrorCodes(Set<String> retryableErrorCodes) {
+    setRetryableErrorCodes(retryableErrorCodes);
+    return this;
+  }
+
   public String getQueryId() {
     //TODO: Call initQueryId() here?
     return queryId;
@@ -868,11 +904,22 @@ public class SQLQuery {
   }
 
   private static SQLQuery buildLabelMatchQuery(String labelIdentifier, String labelValue) {
-    return new SQLQuery("strpos(query, '/*labels(') > 0 AND substring(query, "
-        + "strpos(query, '/*labels(') + 9, "
-        + "strpos(query, ')*/') - 9 - strpos(query, '/*labels('))::json->>#{labelIdentifier} = #{labelValue}")
-        .withNamedParameter("labelIdentifier", labelIdentifier)
+    return new SQLQuery("strpos(query, '/*labels(') > 0 AND ${{extractedLabelValue}} = #{labelValue}")
+        .withQueryFragment("extractedLabelValue", buildLabelValueExtraction(labelIdentifier))
         .withNamedParameter("labelValue", labelValue);
+  }
+
+  /**
+   * Builds the SQL fragment that extracts the value of the label with the specified identifier from the {@code /*labels(...)*}{@code /}
+   * comment prefix of a query in {@code pg_stat_activity}.
+   * @param labelIdentifier The label identifier whose value should be extracted (e.g. taskId).
+   * @return The SQL fragment resolving to the label value as text.
+   */
+  private static SQLQuery buildLabelValueExtraction(String labelIdentifier) {
+    return new SQLQuery("substring(query, "
+        + "strpos(query, '/*labels(') + 9, "
+        + "strpos(query, ')*/') - 9 - strpos(query, '/*labels('))::json->>#{labelIdentifier}")
+        .withNamedParameter("labelIdentifier", labelIdentifier);
   }
 
   public static boolean isRunning(DataSourceProvider dataSourceProvider, boolean useReplica, String queryId) throws SQLException {
@@ -894,6 +941,59 @@ public class SQLQuery {
         .withQueryFragment("labelMatching", buildLabelMatchQuery(labelIdentifier, labelValue))
         .withLoggingEnabled(false)
         .run(dataSourceProvider, rs -> rs.next(), useReplica);
+  }
+
+  /**
+   * Checks which of the provided values are currently running for one label identifier.
+   *
+   * @param labelIdentifier The label identifier to check (e.g. taskId).
+   * @param labelValues The set of values to check for the given label identifier.
+   * @return The subset of provided label values that are currently running.
+   */
+  public static Set<String> areRunning(DataSourceProvider dataSourceProvider, boolean useReplica,
+      String labelIdentifier, Set<String> labelValues) throws SQLException {
+    if (labelValues == null || labelValues.isEmpty())
+      return Set.of();
+
+    return new SQLQuery("""
+        WITH expected_values AS (${{expectedValues}}),
+             active_values AS (
+               SELECT ${{labelValue}} AS label_value
+                 FROM pg_stat_activity
+                WHERE state = 'active'
+                  AND pid != pg_backend_pid()
+                  AND strpos(query, '/*labels(') > 0
+             )
+        SELECT DISTINCT e.label_value
+          FROM expected_values e
+          JOIN active_values a
+            ON a.label_value = e.label_value
+        """)
+        .withQueryFragment("expectedValues", buildLabelValuesQuery(labelValues))
+        .withQueryFragment("labelValue", buildLabelValueExtraction(labelIdentifier))
+        .withLoggingEnabled(false)
+        .run(dataSourceProvider, rs -> {
+          Set<String> runningValues = new LinkedHashSet<>();
+          while (rs.next())
+            runningValues.add(rs.getString("label_value"));
+          return runningValues;
+        }, useReplica);
+  }
+
+  private static SQLQuery buildLabelValuesQuery(Set<String> labelValues) {
+    if (labelValues == null || labelValues.isEmpty())
+      return new SQLQuery("SELECT NULL::text AS label_value WHERE FALSE");
+
+    List<SQLQuery> values = new ArrayList<>();
+    int i = 0;
+    for (String labelValue : labelValues) {
+      String valueParam = "labelValue" + i;
+      values.add(new SQLQuery("SELECT #{" + valueParam + "} AS label_value")
+              .withNamedParameter(valueParam, labelValue));
+      i++;
+    }
+
+    return SQLQuery.join(values, " UNION ALL ");
   }
 
   private static String getClashing(Map<String, ?> map1, Map<String, ?> map2) {
@@ -991,40 +1091,45 @@ public class SQLQuery {
     UPDATE_BATCH
   }
 
-  private static List<String> PwdPrefixList =
-   List.of("6URYTnCc", "pUNuBxnW", "JELgvJWS", "0n1UKjIv", "2YW9D4Kz", "3ZX9D4Kz", "9JwYhcgD", "qvukzFHW", "1CpZNKpG", "kwPU00Qy", "AhYtSea7", "AsSrbSE6");
-
-  private static String hidePwds( String s )
-  { return s.replaceAll("(" + String.join("|", PwdPrefixList ) + ")\\w*", "$1*******"); }
+  private static String hidePwds(String s, DataSourceProvider dataSourceProvider) throws SQLException {
+    return s.replaceAll("(" + dataSourceProvider.getDatabaseSettings().getPassword() + ")\\w*", "*******");
+  }
 
   private Object execute(DataSourceProvider dataSourceProvider, ResultSetHandler<?> handler, ExecutionOperation operation,
       ExecutionContext executionContext) throws SQLException {
     if (loggingEnabled)
-      logger.info("Executing SQLQuery {}", hidePwds( ""+this ));
-    substitute();
+      logger.info("Executing SQLQuery {}", hidePwds("" + this, dataSourceProvider));
+    if (executionContext.executionAttempts == 0)
+      substitute();
 
     final DataSource dataSource = executionContext.useReplica ? dataSourceProvider.getReader() : dataSourceProvider.getWriter();
     executionContext.attemptExecution();
     try {
       if (loggingEnabled)
-        logger.info("Sending query to database {} {}, substituted query-text: {}",
+        logger.log(QUERY_LEVEL, "Sending query to database {} {}, substituted query-text: {}",
             executionContext.useReplica ? "reader" : "writer",
             dataSourceProvider.getDatabaseSettings() != null
                 ? dataSourceProvider.getDatabaseSettings().getId() : "unknown",
-            hidePwds( replaceUnnamedParametersForLogging()) );
+            hidePwds(replaceUnnamedParametersForLogging(), dataSourceProvider));
 
       if (isAsync())
         operation = ExecutionOperation.QUERY;
       return switch (operation) {
-        case QUERY -> executeQuery(dataSource, executionContext, handler);
-        case UPDATE -> executeUpdate(dataSource, executionContext);
-        case UPDATE_BATCH -> executeBatchUpdate(dataSource, executionContext);
+        case QUERY -> executeQuery0(dataSource, executionContext, handler);
+        case UPDATE -> executeUpdate0(dataSource, executionContext);
+        case UPDATE_BATCH -> executeBatchUpdate0(dataSource, executionContext);
       };
     }
     catch (SQLException e) {
       if (executionContext.mayRetry(e)) {
         logger.info("{} Retry Query permitted.", getQueryId());
         executionContext.addRetriedException(e);
+        try {
+          executionContext.awaitRetryBackoff();
+        } catch (InterruptedException ex) {
+          logger.warn("{} Retry Query permitted due to interrupt", getQueryId());
+          throw e;
+        }
         return execute(dataSourceProvider, handler, operation, executionContext);
       }
       else
@@ -1061,34 +1166,30 @@ public class SQLQuery {
     return this;
   }
 
-  private int executeUpdate(DataSource dataSource, ExecutionContext executionContext) throws SQLException {
+  private int executeUpdate0(DataSource dataSource, ExecutionContext executionContext) throws SQLException {
     SQLQuery query = prepareFinalQuery(executionContext);
-    return getRunner(dataSource, executionContext).update(query.text(), query.parameters().toArray());
+    return exec0(dataSource, connection -> getRunner(executionContext).update(connection, query.text(), query.parameters().toArray()));
   }
 
-  private Object executeQuery(DataSource dataSource, ExecutionContext executionContext, ResultSetHandler<?> handler) throws SQLException {
+  private Object executeQuery0(DataSource dataSource, ExecutionContext executionContext, ResultSetHandler<?> handler) throws SQLException {
     SQLQuery query = prepareFinalQuery(executionContext);
 
-    if (context != null)
-      handler = new Ignore1stResultSet(handler);
+    ResultSetHandler<?> finalHandler = context != null ? new Ignore1stResultSet(handler) : handler;
 
-    final List<?> results = getRunner(dataSource, executionContext).execute(query.text(), handler, query.parameters().toArray());
-    return results.size() <= 1 ? results.get(0) : results.get(results.size() - 1);
+    final List<?> results = exec0(dataSource, connection -> getRunner(executionContext).execute(connection, query.text(), finalHandler, query.parameters().toArray()));
+
+    return results.size() == 0 ? null : results.get(results.size() - 1);
   }
 
-  private static QueryRunner getRunner(DataSource dataSource, ExecutionContext executionContext) {
+  private static QueryRunner getRunner(ExecutionContext executionContext) {
     StatementConfiguration statementConfig = executionContext.remainingQueryTimeout > 0
         ? new StatementConfiguration.Builder().queryTimeout(executionContext.remainingQueryTimeout).build()
         : null;
-    return new QueryRunner(dataSource, statementConfig);
+    return new QueryRunner(statementConfig);
   }
 
-  private int[] executeBatchUpdate(DataSource dataSource, ExecutionContext executionContext) throws SQLException {
-    int[] batchResult;
-    try (final Connection connection = dataSource.getConnection()) {
-      if (getLock() != null)
-        advisoryLock(getLock(), connection);
-
+  private int[] executeBatchUpdate0(DataSource dataSource, ExecutionContext executionContext) throws SQLException {
+    return exec0(dataSource, connection -> {
       boolean previousCommitState = connection.getAutoCommit();
       try {
         if (previousCommitState)
@@ -1103,8 +1204,9 @@ public class SQLQuery {
           if (executionContext.remainingQueryTimeout > 0)
             stmt.setQueryTimeout(executionContext.remainingQueryTimeout);
 
-          batchResult = stmt.executeBatch();
+          int[] batchResult = stmt.executeBatch();
           connection.commit();
+          return batchResult;
         }
       }
       catch (SQLException e) {
@@ -1112,14 +1214,29 @@ public class SQLQuery {
         throw e;
       }
       finally {
-        if (getLock() != null)
-          advisoryUnlock(getLock(), connection);
-
         if (previousCommitState)
           connection.setAutoCommit(true);
       }
+    });
+  }
+
+  private <R> R exec0(DataSource dataSource, QueryExecution<R> execution) throws SQLException {
+    try (final Connection connection = dataSource.getConnection()) {
+      //NOTE: Advisory locks are only supported for sync queries for now.
+      if (!isAsync() && getLock() != null)
+        advisoryLock(getLock(), connection);
+      try {
+        return execution.execute(connection);
+      }
+      finally {
+        if (!isAsync() && getLock() != null)
+          advisoryUnlock(getLock(), connection);
+      }
     }
-    return batchResult;
+  }
+
+  private interface QueryExecution<R> {
+    R execute(Connection connection) throws SQLException;
   }
 
   protected class ExecutionContext {
@@ -1168,10 +1285,48 @@ public class SQLQuery {
 
     public boolean mayRetry(Exception e) {
       int usedTimeForAttempt = (int) (System.currentTimeMillis() - lastAttemptTime) / 1000;
-      return remainingQueryTimeout > usedTimeForAttempt / 1000 && isRecoverable(e);
+      return remainingQueryTimeout > usedTimeForAttempt && isRecoverable(e);
+    }
+
+    /**
+     * Waits for the exponential backoff delay before the upcoming retry is performed. The first retry (the 2nd execution
+     * attempt) is executed immediately without any delay to stay backwards compatible; every following retry waits an
+     * exponentially growing amount of time, capped at {@link SQLQuery#RETRY_BACKOFF_MAX_MS}.
+     */
+    public void awaitRetryBackoff() throws InterruptedException {
+      long delay = retryBackoffDelay();
+      if (delay <= 0)
+        return;
+      logger.info("{} Waiting {} ms before retrying the query.", getQueryId(), delay);
+      Thread.sleep(delay);
+    }
+
+    /**
+     * @return the backoff delay in milliseconds for the upcoming retry, or {@code 0} for the first retry. If a query
+     *   timeout is set, the delay is additionally capped at the remaining query time so the backoff can never wait
+     *   longer than the query is still allowed to run.
+     */
+    long retryBackoffDelay() {
+      //At this point executionAttempts was already incremented for the attempt that just failed.
+      //executionAttempts == 1 means the upcoming execution is the 1st retry, which stays immediate.
+      if (executionAttempts <= 1)
+        return 0;
+
+      //Return Delay with exponential backoff, base * 2^n, capped at the maximum.
+      return  (long) Math.min(RETRY_BACKOFF_BASE_MS * Math.pow(2, executionAttempts - 2), RETRY_BACKOFF_MAX_MS);
     }
 
     private boolean isRecoverable(Exception e) {
+      /*
+      A connection-pool checkout timeout is wrapped into a plain SQLException that carries no SQLState. This typically
+      happens under short-lived connection pressure (e.g. serverless Aurora scaling), so it should be retried.
+      Match it by message, since there is no SQLState.
+       */
+      if (e instanceof SQLException && e.getMessage() != null && e.getMessage().contains("checkout a Connection has timed out")) {
+        logger.warn("{} Retryable connection acquisition timeout detected! RemainingTime: {}", getQueryId(),
+            remainingQueryTimeout, e);
+        return true;
+      }
       if (e instanceof SQLException sqlEx && sqlEx.getSQLState() != null && (
           /*
           If a timeout occurs right after the invocation, it could be caused
@@ -1179,7 +1334,8 @@ public class SQLQuery {
           57014 - query_canceled
           57P01 - admin_shutdown
            */
-          sqlEx.getSQLState().equalsIgnoreCase("57014")
+          //NOTE: 57014 occurs when a query got cancelled for various reasons. If the reason was a timeout it should not be retried.
+          sqlEx.getSQLState().equalsIgnoreCase("57014") && !sqlEx.getMessage().toLowerCase().contains("statement timeout")
               /*
               NOTE: "admin_shutdown" (57P01) also is used when some admin user kills the backend
               using pg_terminate_backend. So this SQL state is not treated as recoverable,
@@ -1188,8 +1344,9 @@ public class SQLQuery {
               //|| sqlEx.getSQLState().equalsIgnoreCase("57P01")
               || sqlEx.getSQLState().equalsIgnoreCase("08003")
               || sqlEx.getSQLState().equalsIgnoreCase("08006")
+              || getRetryableErrorCodes().contains(sqlEx.getSQLState())
       )) {
-        logger.warn("{} Error based on serverless scaling detected! RemainingTime: {}", getQueryId(), remainingQueryTimeout, e);
+        logger.warn("{} Retryable error detected! RemainingTime: {}", getQueryId(), remainingQueryTimeout, e);
         return true;
       }
       return false;

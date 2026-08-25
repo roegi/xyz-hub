@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2017-2024 HERE Europe B.V.
- *
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,14 +21,12 @@ package com.here.xyz.jobs.steps.impl.transport;
 import static com.here.xyz.events.ContextAwareEvent.SpaceContext.EXTENSION;
 import static com.here.xyz.jobs.steps.execution.db.Database.DatabaseRole.WRITER;
 import static com.here.xyz.jobs.steps.execution.db.Database.loadDatabase;
-import static com.here.xyz.jobs.steps.impl.transport.TransportTools.Phase.STEP_EXECUTE;
-import static com.here.xyz.jobs.steps.impl.transport.TransportTools.Phase.STEP_RESUME;
-import static com.here.xyz.jobs.steps.impl.transport.TransportTools.createQueryContext;
-import static com.here.xyz.jobs.steps.impl.transport.TransportTools.infoLog;
+import static com.here.xyz.jobs.steps.impl.SpaceBasedStep.LogPhase.STEP_EXECUTE;
+import static com.here.xyz.jobs.steps.impl.SpaceBasedStep.LogPhase.STEP_RESUME;
 
 import com.fasterxml.jackson.annotation.JsonView;
 import com.here.xyz.events.PropertiesQuery;
-import com.here.xyz.jobs.datasets.filters.SpatialFilter;
+import com.here.xyz.models.filters.SpatialFilter;
 import com.here.xyz.jobs.steps.execution.StepException;
 import com.here.xyz.jobs.steps.execution.db.Database;
 import com.here.xyz.jobs.steps.impl.SpaceBasedStep;
@@ -37,16 +34,19 @@ import com.here.xyz.jobs.steps.inputs.InputFromOutput;
 import com.here.xyz.jobs.steps.outputs.CreatedVersion;
 import com.here.xyz.jobs.steps.resources.Load;
 import com.here.xyz.jobs.steps.resources.TooManyResourcesClaimed;
+import com.here.xyz.models.geojson.coordinates.WKTHelper;
+import com.here.xyz.models.geojson.implementation.Geometry;
 import com.here.xyz.models.hub.Ref;
 import com.here.xyz.models.hub.Space;
 import com.here.xyz.psql.query.GetFeaturesByGeometryBuilder;
 import com.here.xyz.psql.query.GetFeaturesByGeometryBuilder.GetFeaturesByGeometryInput;
 import com.here.xyz.psql.query.QueryBuilder.QueryBuildingException;
+import com.here.xyz.responses.StatisticsResponse;
 import com.here.xyz.util.db.SQLQuery;
+import com.here.xyz.util.db.pg.FeatureWriterQueryBuilder.FeatureWriterQueryContextBuilder;
 import com.here.xyz.util.service.BaseHttpServerVerticle.ValidationException;
 import com.here.xyz.util.web.XyzWebClient.WebClientException;
-import java.io.IOException;
-import java.sql.SQLException;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +59,7 @@ import org.apache.logging.log4j.Logger;
  * only copy a dataset subset from the source space.
  */
 //TODO: Merge version creation step into this step again (basically both: pre- & post-step)
+//TODO: implement TaskedSpaceBasedStep
 public class CopySpace extends SpaceBasedStep<CopySpace> {
   private static final Logger logger = LogManager.getLogger();
 
@@ -71,6 +72,8 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
   private PropertiesQuery propertyFilter;
   @JsonView({Internal.class, Static.class})
   private Ref sourceVersionRef;
+  @JsonView({Internal.class, Static.class}) //TODO: Remove static
+  private long minSpaceVersion = -1;
   @JsonView({Internal.class, Static.class})
   private int[] threadInfo = {0,1};  // [threadId, threadCount]
 
@@ -92,7 +95,7 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
 
     double neededAcus = (nrFeatureSource <= ftBlock ? 1.0 : (nrFeatureSource / ftBlock) * 0.5 + 0.5);
 
-    return Math.min(neededAcus, maxAcus);
+    return Math.min(neededAcus, maxAcus) / 2.0;
   }
 
   public static int calculateCopyTimeInSeconds(long nrFeatureSource, long featureCountInTarget) {
@@ -172,6 +175,12 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
     return this;
   }
 
+ public CopySpace withEstimatedTargetFeatureCount(long estimatedTargetFeatureCount) {
+    this.estimatedTargetFeatureCount = estimatedTargetFeatureCount;
+    return this;
+ }
+
+
   private long getTargetVersion() {
     return targetVersion;
   }
@@ -213,7 +222,7 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
 
   @Override
   public int getTimeoutSeconds() {
-    return 2 * 3600; //TODO: Calculate using #getEstimatedExecutionSeconds()
+    return 12 * 3600; //TODO: Calculate using #getEstimatedExecutionSeconds()
   }
 
   private int getThreadPartitions() {
@@ -244,6 +253,7 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
   @Override
   public boolean validate() throws ValidationException {
     super.validate();
+    validateRef(sourceVersionRef);
 
     if (getTargetSpaceId() == null)
       throw new ValidationException("Target Id is missing!");
@@ -281,8 +291,9 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
   private long loadSourceFeatureCount() {
     if (estimatedSourceFeatureCount < 0) {
       try {
-        estimatedSourceFeatureCount = loadSpaceStatistics(getSpaceId(), space().getExtension() != null ? EXTENSION : null)
-            .getCount().getValue();
+        StatisticsResponse statisticsResponse = loadSpaceStatistics(getSpaceId(), space().getExtension() != null ? EXTENSION : null);
+        estimatedSourceFeatureCount = statisticsResponse.getCount().getValue();
+        minSpaceVersion = statisticsResponse.getMinVersion().getValue();
       }
       catch (WebClientException e) {
         throw new StepException("Error loading the source feature count", e).withRetryable(true);
@@ -294,7 +305,7 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
   private long loadTargetFeatureCount() {
     if (estimatedTargetFeatureCount < 0) {
       try {
-        estimatedTargetFeatureCount = loadSpaceStatistics(getSpaceId(), space().getExtension() != null ? EXTENSION : null)
+        estimatedTargetFeatureCount = loadSpaceStatistics(getTargetSpaceId(), space().getExtension() != null ? EXTENSION : null)
             .getCount().getValue();
       }
       catch (WebClientException e) {
@@ -324,7 +335,10 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
       int threadId = getThreadInfo()[0],
           threadCount = getThreadInfo()[1];
 
-      infoLog(resume ? STEP_RESUME : STEP_EXECUTE, this, "Start ImlCopy thread number: " + threadId + " / " + threadCount
+      if( threadCount > 1 )
+       Thread.sleep( 30_000); // MMSUP-2840 - consistency, wait on multiple thread to assure "old" versions written by rest persists in db
+
+      infoLog(resume ? STEP_RESUME : STEP_EXECUTE,  "Start ImlCopy thread number: " + threadId + " / " + threadCount
           + "; target version: " + getTargetVersion());
 
       Space targetSpace = targetSpace();
@@ -339,7 +353,7 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
   }
 
   @Override
-  protected void onAsyncSuccess() throws WebClientException, SQLException, TooManyResourcesClaimed, IOException {
+  protected void onAsyncSuccess(){
     logger.info("[{}] AsyncSuccess Copy {} -> {}", getGlobalStepId(), getSpaceId() , getTargetSpaceId());
   }
 
@@ -354,20 +368,28 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
     return !space().getStorage().getId().equals(targetSpace().getStorage().getId());
   }
 
+  private boolean useTableCopy() { return loadTargetFeatureCount() == 0; }
+
   private SQLQuery buildCopySpaceQuery(int threadCount, int threadId) throws WebClientException, QueryBuildingException,
       TooManyResourcesClaimed {
     String targetStorageId = targetSpace().getStorage().getId(),
         targetSchema = getSchema(loadDatabase(targetStorageId, WRITER)),
         targetTable = getRootTableName(targetSpace());
 
-    final Map<String, Object> queryContext = createQueryContext(getId(), targetSchema, targetTable, targetSpace().getVersionsToKeep() > 1,
-        null);
+    final Map<String, Object> queryContext = new FeatureWriterQueryContextBuilder()
+        .withSchema(targetSchema)
+        .withTables(List.of(targetTable))
+        .withHistoryEnabled(targetSpace().getVersionsToKeep() > 1)
+        .withBatchMode(true)
+        .build();
 
     SQLQuery contentQuery = buildCopyContentQuery(threadCount, threadId);
 
     if (isRemoteCopy())
-      contentQuery = buildCopyQueryRemoteSpace(dbReader(), contentQuery);
+      contentQuery = buildCopyQueryRemoteSpace(dbReader(), contentQuery, useTableCopy());
 
+    if (! useTableCopy() )
+    {
     int maxBatchSize = 1000;
     //TODO: Do not use slow JSONB functions in the following query!
     //TODO: Simplify / deduplicate the following query
@@ -376,60 +398,61 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
           (
             select
               write_features(
-               jsonb_build_array(
-                case deleted_flag when false then
-                  jsonb_build_object('updateStrategy','{"onExists":null,"onNotExists":null,"onVersionConflict":null,"onMergeConflict":null}'::jsonb,
-                                      'partialUpdates',false,
-                                      'featureData', jsonb_build_object( 'type', 'FeatureCollection', 'features', jsonb_agg( iidata.feature ) ))
-                else
-                    jsonb_build_object('updateStrategy','{"onExists":"DELETE","onNotExists":"RETAIN"}'::jsonb,
-                                      'partialUpdates',false,
-                                      'featureIds', jsonb_agg( iidata.feature->'id' ) )
-                end
-              )::text,
-                 'Modifications', iidata.author,false,${{versionToBeUsed}}
+                jsonb_agg( iidata.feature )::TEXT,
+                'Features',
+                iidata.author,
+                false,
+                ${{versionToBeUsed}}
               ) as wfresult
             from
             (
-             select ((row_number() over ())-1)/${{maxblksize}} as rn, 
-                    idata.jsondata#>>'{properties,@ns:com:here:xyz,author}' as author, 
-                    idata.jsondata || jsonb_build_object('geometry', (idata.geo)::json) as feature,
-                    ((idata.jsondata#>>'{properties,@ns:com:here:xyz,deleted}') is not null) as deleted_flag
+             select ((row_number() over ())-1)/${{maxBatchSize}} as rn,
+                    idata.jsondata#>>'{properties,@ns:com:here:xyz,author}' as author,
+                    idata.jsondata || jsonb_build_object('geometry', (idata.geo)::json) as feature
              from
              ( ${{contentQuery}} ) idata
             ) iidata
-            group by rn, author, deleted_flag
+            group by rn, author
           )
           select sum((wfresult::json->>'count')::bigint)::bigint into dummy_output from ins_data
         """).withContext(queryContext)
-        .withQueryFragment("maxblksize", "" + maxBatchSize)
+        .withQueryFragment("maxBatchSize", "" + maxBatchSize)
         .withQueryFragment("versionToBeUsed", "" + getTargetVersion())
         .withQueryFragment("contentQuery", contentQuery);
+    }
+    else
+    {
+      return new SQLQuery("""
+      WITH ins_data as
+      (
+        INSERT INTO ${schema}.${table} AS tbl (jsondata, operation, author, geo, id, version, next_version )
+          SELECT idata.jsondata, case when idata.operation = 'U' then 'I' else idata.operation end AS operation, idata.author, idata.geo, idata.id, ${{versionToBeUsed}} as version, max_bigint() as next_version
+          FROM
+          (
+            ${{contentQuery}}
+          ) idata
+        ON CONFLICT (id, version, next_version) DO UPDATE SET
+          jsondata  = EXCLUDED.jsondata,
+          author    = EXCLUDED.author,
+          operation = EXCLUDED.operation,
+          geo       = EXCLUDED.geo
+          WHERE (EXCLUDED.jsondata#>>'{properties,@ns:com:here:xyz,updatedAt}')::bigint
+              > (tbl.jsondata#>>'{properties,@ns:com:here:xyz,updatedAt}')::bigint
+        RETURNING id
+      ),
+      count_data as
+      ( SELECT count(1) AS rows FROM ins_data )
+      select rows into dummy_output from count_data
+    """)
+    .withVariable("schema", targetSchema)
+    .withVariable("table", targetTable)
+    .withQueryFragment("versionToBeUsed", "" + getTargetVersion())
+    .withQueryFragment("contentQuery", contentQuery);
+    }
   }
 
-  private SQLQuery buildCopyContentQuery(int threadCount, int threadId) throws WebClientException, QueryBuildingException,
-      TooManyResourcesClaimed {
-
-    Database db = !isRemoteCopy()
-        ? loadDatabase(space().getStorage().getId(), WRITER)
-        : dbReader();
-
-    GetFeaturesByGeometryBuilder queryBuilder = new GetFeaturesByGeometryBuilder()
-        .withDataSourceProvider(requestResource(db, 0));
-
-    GetFeaturesByGeometryInput input = new GetFeaturesByGeometryInput(
-        space().getId(),
-        hubWebClient().loadConnector(space().getStorage().getId()).params,
-        space().getExtension() != null ? space().resolveCompositeParams(superSpace()) : null,
-        EXTENSION,
-        space().getVersionsToKeep(),
-        sourceVersionRef,
-        spatialFilter != null ? spatialFilter.getGeometry() : null,
-        spatialFilter != null ? spatialFilter.getRadius() : 0,
-        spatialFilter != null && spatialFilter.isClip(),
-        propertyFilter
-    );
-
+  private SQLQuery buildThreadIdFilter( int threadCount, int threadId )
+  {
     final long VIZ_ID_COUNT = 0xfffffL + 1,
                blockRange = (long) Math.ceil((double) VIZ_ID_COUNT / (double) threadCount);
 
@@ -460,12 +483,66 @@ public class CopySpace extends SpaceBasedStep<CopySpace> {
      if(upperBoundCondition != null)
       additionalFilterFragment.withQueryFragment(lowerBoundCondition != null ? "Bound2" : "Bound1", upperBoundCondition);
 
-     queryBuilder.withAdditionalFilterFragment(additionalFilterFragment);
+     return additionalFilterFragment;
     }
 
-    return queryBuilder
-        //.withSelectionOverride(new SQLQuery("jsondata, author, operation"))
-        //TODO: with author, operation provided in selection the parsing of those values in buildCopySpaceQuery would be obsolete
-        .buildQuery(input);
+    return null;
+  }
+
+  private SQLQuery buildGeoFragment() {
+
+    Geometry geometry =  spatialFilter != null ? spatialFilter.getGeometry() : null;
+    int radius = spatialFilter != null ? spatialFilter.getRadius() : 0;
+    boolean clipOnFilterGeometry = spatialFilter != null && spatialFilter.isClip();
+
+    if (geometry != null && clipOnFilterGeometry) {
+     if( radius > 0 )
+       return new SQLQuery("ST_Intersection(ST_MakeValid(geo), ST_Buffer(ST_GeomFromText(#{wktGeometryImlCopy})::geography, #{radiusImlCopy})::geometry) as geo")
+               .withNamedParameter("wktGeometryImlCopy", WKTHelper.geometryToWKB(geometry))
+               .withNamedParameter("radiusImlCopy", radius);
+     else
+       return new SQLQuery("ST_Intersection(ST_MakeValid(geo), st_setsrid( ST_GeomFromText( #{wktGeometryImlCopy} ),4326 )) as geo")
+               .withNamedParameter("wktGeometryImlCopy", WKTHelper.geometryToWKB(geometry));
+    }
+    else
+      return new SQLQuery("geo");
+  }
+
+  private SQLQuery buildCopyContentQuery(int threadCount, int threadId) throws WebClientException, QueryBuildingException,
+      TooManyResourcesClaimed {
+
+    Database db = !isRemoteCopy()
+        ? loadDatabase(space().getStorage().getId(), WRITER)
+        : dbReader();
+
+    GetFeaturesByGeometryBuilder queryBuilder = new GetFeaturesByGeometryBuilder()
+        .withDataSourceProvider(requestResource(db, 0));
+
+    GetFeaturesByGeometryInput input = new GetFeaturesByGeometryInput(
+        space().getId(),
+        hubWebClient().loadConnector(space().getStorage().getId()).params,
+        space().getExtension() != null ? space().resolveCompositeParams(superSpace()) : null,
+        EXTENSION,
+        space().getVersionsToKeep(),
+        minSpaceVersion,
+        sourceVersionRef,
+        spatialFilter != null ? spatialFilter.getGeometry() : null,
+        spatialFilter != null ? spatialFilter.getRadius() : 0,
+        spatialFilter != null && spatialFilter.isClip(),
+        propertyFilter
+    );
+
+    SQLQuery threadIdFilter = buildThreadIdFilter(threadCount, threadId);
+
+    if( threadIdFilter != null )
+     queryBuilder.withAdditionalFilterFragment(threadIdFilter);
+
+    if(! useTableCopy() )
+     return queryBuilder.buildQuery(input); //TODO: with author, operation provided in selection the parsing of those values in buildCopySpaceQuery would be obsolete
+    else
+     return queryBuilder
+            .withSelectClauseOverride(new SQLQuery("id, jsondata, operation, author, ${{PlainGeom}} ").withQueryFragment("PlainGeom",buildGeoFragment()))
+            .buildQuery(input);
+
   }
 }

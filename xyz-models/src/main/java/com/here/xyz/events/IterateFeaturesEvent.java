@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2019 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,93 +21,54 @@ package com.here.xyz.events;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonTypeName;
-import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonTypeName(value = "IterateFeaturesEvent")
-public final class IterateFeaturesEvent extends SearchForFeaturesEvent<IterateFeaturesEvent> {
+public class IterateFeaturesEvent<T extends IterateFeaturesEvent> extends SearchForFeaturesEvent<T> {
 
-  private String handle;
-  @Deprecated
-  private Integer v;
-  private List<String> sort;
-  private Integer[] part;
-  private boolean enableGlobalVersioning;
-
-  @Deprecated
-  public Integer getV() {
-    return v;
-  }
-
-  @Deprecated
-  public void setV(Integer v) {
-    this.v = v;
-  }
-
-  @Deprecated
-  public IterateFeaturesEvent withV(Integer v) {
-    setV(v);
-    return this;
-  }
+  private String nextPageToken;
+  private long startI = -1; //NOTE: Not to be used in combination with nextPageToken
+  private long endI = -1; //NOTE: Not to be used in combination with nextPageToken
 
   @SuppressWarnings("unused")
-  public String getHandle() {
-    return handle;
+  public String getNextPageToken() {
+    return nextPageToken;
   }
 
   @SuppressWarnings("WeakerAccess")
-  public void setHandle(String handle) {
-    this.handle = handle;
+  public void setNextPageToken(String nextPageToken) {
+    this.nextPageToken = nextPageToken;
   }
 
   @SuppressWarnings("unused")
-  public IterateFeaturesEvent withHandle(String handle) {
-    setHandle(handle);
-    return this;
+  public T withNextPageToken(String nextPageToken) {
+    setNextPageToken(nextPageToken);
+    return (T) this;
   }
 
-  @SuppressWarnings("unused")
-  public List<String> getSort() {
-    return this.sort;
+  public long getStartI() {
+    return startI;
   }
 
-  @SuppressWarnings("WeakerAccess")
-  public void setSort(List<String> sort) {
-    this.sort = sort;
+  public void setStartI(long startI) {
+    this.startI = startI;
   }
 
-  @SuppressWarnings("unused")
-  public IterateFeaturesEvent withSort(List<String> sort) {
-    setSort(sort);
-    return this;
+  public T withStartI(long startI) {
+    setStartI(startI);
+    return (T) this;
   }
 
-  @SuppressWarnings("unused")
-  public Integer[] getPart() {
-    return this.part;
+  public long getEndI() {
+    return endI;
   }
 
-  @SuppressWarnings("WeakerAccess")
-  public void setPart(Integer[] part) {
-    this.part = part;
+  public void setEndI(long endI) {
+    this.endI = endI;
   }
 
-  @SuppressWarnings("unused")
-  public IterateFeaturesEvent withPart(Integer[] part) {
-    setPart(part);
-    return this;
-  }
-
-  public boolean isEnableGlobalVersioning() {
-    return enableGlobalVersioning;
-  }
-
-  public void setEnableGlobalVersioning(boolean enableGlobalVersioning) {
-    this.enableGlobalVersioning = enableGlobalVersioning;
-  }
-
-  public IterateFeaturesEvent withEnableGlobalVersioning(boolean enableGlobalVersioning) {
-    setEnableGlobalVersioning(enableGlobalVersioning);
-    return this;
+  public T withEndI(long endI) {
+    setEndI(endI);
+    return (T) this;
   }
 }

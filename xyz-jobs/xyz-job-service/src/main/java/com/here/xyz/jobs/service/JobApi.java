@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017-2025 HERE Europe B.V.
+ * Copyright (C) 2017-2026 HERE Europe B.V.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,8 +25,9 @@ import static com.here.xyz.jobs.RuntimeInfo.State.RUNNING;
 import static com.here.xyz.jobs.RuntimeStatus.Action.CANCEL;
 import static com.here.xyz.jobs.service.JobApiBase.ApiParam.Path.SPACE_ID;
 import static com.here.xyz.jobs.service.JobApiBase.ApiParam.getPathParam;
-import static com.here.xyz.jobs.steps.Step.InputSet.DEFAULT_INPUT_SET_NAME;
+import static com.here.xyz.jobs.steps.Step.InputSet.DEFAULT_SET_NAME;
 import static io.netty.handler.codec.http.HttpResponseStatus.ACCEPTED;
+import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.CREATED;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 
@@ -50,6 +51,7 @@ import com.here.xyz.util.service.errors.DetailedHttpException;
 import io.vertx.core.Future;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.openapi.router.RouterBuilder;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -59,18 +61,28 @@ import org.apache.logging.log4j.Logger;
 
 public class JobApi extends JobApiBase {
   protected static final Logger logger = LogManager.getLogger();
+
   protected JobApi() {}
 
   public JobApi(RouterBuilder rb) {
+    initApi(rb);
+  }
+
+  protected void initApi(RouterBuilder rb) {
     rb.getRoute("postJob").setDoValidation(false).addHandler(handleErrors(this::postJob));
     rb.getRoute("getJobs").setDoValidation(false).addHandler(handleErrors(this::getJobs));
     rb.getRoute("getJob").setDoValidation(false).addHandler(handleErrors(this::getJob));
     rb.getRoute("deleteJob").setDoValidation(false).addHandler(handleErrors(this::deleteJob));
     rb.getRoute("postJobInputs").setDoValidation(false).addHandler(handleErrors(this::postJobInput));
-    rb.getRoute("getJobInputs").setDoValidation(false).addHandler(handleErrors(this::getJobInputs));
+    // has also deprecated flat mode
+    rb.getRoute("getJobInputPayloadsPreview").setDoValidation(false).addHandler(handleErrors(this::getJobInputPayloadsPreview));
     rb.getRoute("postNamedJobInputs").setDoValidation(false).addHandler(handleErrors(this::postJobInput));
-    rb.getRoute("getNamedJobInputs").setDoValidation(false).addHandler(handleErrors(this::getJobInputs));
-    rb.getRoute("getJobOutputs").setDoValidation(false).addHandler(handleErrors(this::getJobOutputs));
+    rb.getRoute("getJobInputGroupPayloadsPreview").setDoValidation(false).addHandler(handleErrors(this::getJobInputGroupPayloadsPreview));
+    // has also deprecated flat mode
+    rb.getRoute("getJobOutputPayloadsPreview").setDoValidation(false).addHandler(handleErrors(this::getJobOutputPayloadsPreview));
+    rb.getRoute("getJobOutputGroupPayloadsPreview").setDoValidation(false).addHandler(handleErrors(this::getJobOutputGroupPayloadsPreview));
+    rb.getRoute("getJobPaginatedOutputs").setDoValidation(false).addHandler(handleErrors(this::getJobPaginatedOutputs));
+    rb.getRoute("getJobPaginatedInputs").setDoValidation(false).addHandler(handleErrors(this::getJobPaginatedInputs));
     rb.getRoute("patchJobStatus").setDoValidation(false).addHandler(handleErrors(this::patchJobStatus));
     rb.getRoute("getJobStatus").setDoValidation(false).addHandler(handleErrors(this::getJobStatus));
   }
@@ -80,22 +92,50 @@ public class JobApi extends JobApiBase {
   }
 
   protected Future<Job> createNewJob(RoutingContext context, Job job) {
-    logger.info(getMarker(context), "Received job creation request: {}", job.serialize(true));
+    logger.info(getMarker(context), "Received job creation request: {} alongside the following inputs: {}"
+            , job.serialize(true), XyzSerializable.serialize(job.getInputs(), true));
     return job.create().submit()
         .compose(v -> applyInputReferences(job))
         .map(res -> job)
-        .recover(t -> {
-          if (t instanceof CompilationError)
-            return Future.failedFuture(new DetailedHttpException("E319002", t));
-          if (t instanceof ValidationException)
-            return Future.failedFuture(new DetailedHttpException("E319003", t));
-          return Future.failedFuture(t);
-        })
+        .recover(t -> Future.failedFuture(normalizeJobCreationError(t, job.getId())))
         .onSuccess(res -> {
           sendResponse(context, CREATED.code(), res);
           logger.info(getMarker(context), "Job was created successfully: {}", job.serialize(true));
         })
         .onFailure(err -> sendErrorResponse(context, err));
+  }
+
+  protected Throwable normalizeJobCreationError(Throwable error, String jobId) {
+    final Throwable rootCause = rootCause(error);
+    final Map<String, Object> errorDetails = Map.of("jobId", jobId);
+
+    if (error instanceof CompilationError)
+      return new DetailedHttpException("E319002", placeholdersFor(error), errorDetails, error);
+
+    if (error instanceof ValidationException)
+      return new DetailedHttpException("E319003", placeholdersFor(error), errorDetails, error);
+
+    if (rootCause instanceof ClassCastException)
+      return new DetailedHttpException("E319003", placeholdersFor(rootCause), errorDetails, rootCause);
+
+    if (error instanceof IllegalArgumentException || error instanceof IllegalStateException)
+      return new HttpException(BAD_REQUEST, error.getMessage(), error, errorDetails);
+
+    return error;
+  }
+
+  private static Throwable rootCause(Throwable error) {
+    Throwable current = error;
+    while (current.getCause() != null && current.getCause() != current)
+      current = current.getCause();
+    return current;
+  }
+
+  private static Map<String, String> placeholdersFor(Throwable error) {
+    Map<String, String> placeholders = new HashMap<>();
+    if (error != null && error.getMessage() != null)
+      placeholders.put("cause", error.getMessage());
+    return placeholders;
   }
 
   protected Future<Void> applyInputReferences(Job job) {
@@ -148,7 +188,7 @@ public class JobApi extends JobApiBase {
   protected void postJobInput(final RoutingContext context) throws HttpException {
     String jobId = jobId(context);
     Input input = getJobInputFromBody(context);
-    String inputSetName = inputSetName(context);
+    String inputSetName = retrieveSetName(context);
 
     Future<Input> inputCreatedFuture = loadJob(context, jobId).compose(job -> registerInput(context, job, input, inputSetName));
 
@@ -203,7 +243,7 @@ public class JobApi extends JobApiBase {
     else if (context.request().bytesRead() > 256 * 1024)
       return Future.failedFuture(new DetailedHttpException("E319007"));
     else
-      return job.consumeInput(modelBasedInput).map(null);
+      return job.consumeInput(modelBasedInput).mapEmpty();
   }
 
   private static Future<Input> registerInput(Job job, InputsFromS3 s3Inputs, String inputSetName) {
@@ -213,18 +253,72 @@ public class JobApi extends JobApiBase {
     return Future.succeededFuture(null);
   }
 
-  protected void getJobInputs(final RoutingContext context) {
+  protected void getJobInputPayloadsPreview(final RoutingContext context) {
+    final boolean paginatedMode = isPaginatedRequest(context);
+
+    if (paginatedMode) {
+      loadJob(context, jobId(context))
+          .compose(Job::composeInputsPreview)
+          .onSuccess(summary -> sendResponse(context, OK.code(), summary))
+          .onFailure(err -> sendErrorResponse(context, err));
+    } else {
+      final String name = retrieveSetName(context);
+      loadJob(context, jobId(context))
+          .compose(job -> job.loadInputs(name)
+          .onSuccess(items -> sendResponse(context, OK.code(), items, new TypeReference<List<Input>>() {
+          }))
+          .onFailure(err -> sendErrorResponse(context, err)));
+    }
+  }
+
+  protected void getJobInputGroupPayloadsPreview(final RoutingContext context) {
+      String group = retrieveSetGroup(context);
+      loadJob(context, jobId(context))
+          .compose(job -> job.composeInputGroupPreview(group))
+          .onSuccess(summary -> sendResponse(context, OK.code(), summary))
+          .onFailure(err -> sendErrorResponse(context, err));
+  }
+
+  protected void getJobOutputPayloadsPreview(final RoutingContext context) {
+    final boolean paginatedMode = isPaginatedRequest(context);
+
+    if (paginatedMode) {
+      loadJob(context, jobId(context))
+          .compose(Job::composeOutputsPreview)
+          .onSuccess(summary -> sendResponse(context, OK.code(), summary))
+          .onFailure(err -> sendErrorResponse(context, err));
+    } else {
+      loadJob(context, jobId(context))
+          .compose(Job::loadOutputs)
+          .onSuccess(res -> sendResponse(context, OK.code(), res, new TypeReference<List<Output>>() {}))
+          .onFailure(err -> sendErrorResponse(context, err));
+    }
+  }
+
+  protected void getJobOutputGroupPayloadsPreview(final RoutingContext context) {
+    final String group = Objects.requireNonNull(retrieveSetGroup(context));
     loadJob(context, jobId(context))
-        .compose(job -> job.loadInputs(inputSetName(context)))
-        .onSuccess(res -> sendResponse(context, OK.code(), res, new TypeReference<List<Input>>() {}))
+        .compose(job -> job.composeOutputGroupPreview(group))
+        .onSuccess(summary -> sendResponse(context, OK.code(), summary))
         .onFailure(err -> sendErrorResponse(context, err));
   }
 
-  protected void getJobOutputs(final RoutingContext context) {
+  protected void getJobPaginatedOutputs(final RoutingContext context) {
+    final String group = Objects.requireNonNull(retrieveSetGroup(context));
+    final String name = Objects.requireNonNull(retrieveSetName(context));
     loadJob(context, jobId(context))
-        .compose(job -> job.loadOutputs())
-        .onSuccess(res -> sendResponse(context, OK.code(), res, new TypeReference<List<Output>>() {}))
+        .compose(job -> job.loadOutputs(name, group, limit(context), pageToken(context)))
+        .onSuccess(res -> sendResponse(context, OK.code(), res))
         .onFailure(err -> sendErrorResponse(context, err));
+  }
+
+  protected void getJobPaginatedInputs(final RoutingContext context) {
+    final String group = Objects.requireNonNull(retrieveSetGroup(context));
+    final String name = Objects.requireNonNull(retrieveSetName(context));
+    loadJob(context, jobId(context))
+        .compose(job -> job.loadInputs(name, group, limit(context), pageToken(context))
+        .onSuccess(res -> sendResponse(context, OK.code(), res))
+        .onFailure(err -> sendErrorResponse(context, err)));
   }
 
   protected void patchJobStatus(final RoutingContext context) throws HttpException {
@@ -273,9 +367,16 @@ public class JobApi extends JobApiBase {
     return Future.succeededFuture();
   }
 
-  protected String inputSetName(RoutingContext context) {
-    String setName = context.pathParam("setName");
-    return setName == null ? DEFAULT_INPUT_SET_NAME : setName;
+  protected String retrieveSetName(RoutingContext context) {
+    String setName = context.pathParam("name");
+    if (setName == null) {
+      setName = context.pathParam("setName");
+    }
+    return setName == null ? DEFAULT_SET_NAME : setName;
+  }
+
+  protected String retrieveSetGroup(RoutingContext context) {
+    return context.pathParam("group");
   }
 
   protected Input getJobInputFromBody(RoutingContext context) throws HttpException {

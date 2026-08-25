@@ -22,15 +22,19 @@ package com.here.xyz.jobs.steps.impl;
 import com.here.xyz.jobs.steps.resources.Load;
 import com.here.xyz.jobs.steps.resources.TooManyResourcesClaimed;
 import com.here.xyz.util.db.SQLQuery;
+import com.here.xyz.util.service.Core;
 import com.here.xyz.util.web.XyzWebClient.WebClientException;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 public class AnalyzeSpaceTable extends SpaceBasedStep<AnalyzeSpaceTable> {
   private static final Logger logger = LogManager.getLogger();
+
   @Override
   public List<Load> getNeededResources() {
     try {
@@ -67,11 +71,18 @@ public class AnalyzeSpaceTable extends SpaceBasedStep<AnalyzeSpaceTable> {
   }
 
   @Override
+  protected void onAsyncSuccess() throws Exception {
+    super.onAsyncSuccess();
+    logger.info("[{}] Re-activating the space {}", getGlobalStepId(), getSpaceId());
+    hubWebClient().patchSpace(getSpaceId(), Map.of("active", true));
+  }
+
+  @Override
   public void execute(boolean resume) {
     logger.info("Analyze table of space " + getSpaceId() + " ...");
 
     try {
-      runReadQueryAsync(buildAnalyseQuery(getSchema(db()), getRootTableName(space())), db(), calculateNeededAcus());
+      runReadQueryAsync(buildAnalyseQuery(getSchema(db()), getTableName(space(), getVersionRef())), db(), calculateNeededAcus());
     }
     catch (SQLException | TooManyResourcesClaimed | WebClientException e) {
       //@TODO: ErrorHandling! <- Is it necessary here? Anything that should be catched / transformed?
